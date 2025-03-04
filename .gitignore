@@ -1,0 +1,3 @@
+src/landsat/config.py
+__pycache__/
+data/*
