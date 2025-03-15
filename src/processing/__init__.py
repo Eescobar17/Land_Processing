@@ -1,4 +1,4 @@
-from .indexes import (
+from .indices import (
     read_band,
     calculate_ndvi,
     calculate_ndsi,
