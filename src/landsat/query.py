@@ -3,18 +3,28 @@ import itertools
 import json
 import geopandas as gpd
 
-def generate_landsat_query(file_path, start_date, end_date, cloud_cover=5, platform=["LANDSAT_8"], collections=["landsat-c2l2-sr"], limit=100):
+def generate_landsat_query(
+        file_path,
+        import_mode,
+        generate_mode,
+        path_row_mode,
+        path,
+        row,
+        start_date,
+        end_date,
+        diff_date_enabled,
+        diff_start_date,
+        diff_end_date,
+        cloud_cover,
+        selected_indices,
+        imported_file,
+        platform=["LANDSAT_8"],
+        collections=["landsat-c2l2-sr"],
+        limit=100
+    ):
+
     """
     Generates a query for the LandsatLook API from a GeoJSON or Shapefile.
-
-    :param file_path: Path to the GeoJSON or Shapefile.
-    :param start_date: Start date in 'YYYY-MM-DD' format.
-    :param end_date: End date in 'YYYY-MM-DD' format.
-    :param cloud_cover: Maximum cloud cover percentage (default is 5%).
-    :param platform: List of Landsat platforms (default is ['LANDSAT_8']).
-    :param collections: List of Landsat collections (default is ['landsat-c2l2-sr']).
-    :param limit: Maximum number of results per page (default is 100).
-    :return: Dictionary with the generated query.
     """  
 
     # Cargar el archivo en un GeoDataFrame

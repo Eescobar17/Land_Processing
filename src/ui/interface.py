@@ -1,6 +1,7 @@
 import os
 import json
 import tempfile
+import shutil
 import folium
 from folium.plugins import Draw
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QPushButton, QTextEdit,
@@ -177,6 +178,10 @@ class MapAppWindow(QMainWindow):
         self.cloud_cover_value = 50
         self.platform_value = "Landsat 8"
         self.imported_file_path = ""
+        self.generated_file_path = ""
+
+        # Variable booleana para activar el panel de instrucciones del mapa
+        self.show_instructions = False
         
         # Fechas (inicializadas con formato)
         self.start_date = "dd/mm/yyyy"
@@ -324,11 +329,12 @@ class MapAppWindow(QMainWindow):
         self.generate_radio.toggled.connect(self.toggle_generate_mode)
         hbox2.addWidget(self.generate_radio)
 
-        self.generator_button = QPushButton("Generador")
-        self.generator_button.setFixedWidth(120)
-        self.generator_button.setEnabled(False)
-        self.generator_button.clicked.connect(self.open_polygon_generator)
-        hbox2.addWidget(self.generator_button)
+        self.generator_textbox = QLineEdit()
+        self.generator_textbox.setFixedWidth(120)
+        self.generator_textbox.setReadOnly(True)
+        self.generator_textbox.setPlaceholderText("GeoJSON...")
+        self.generator_textbox.setStyleSheet("background-color: #F0F0F0;")
+        hbox2.addWidget(self.generator_textbox)
 
         guide_button = QPushButton("GUÍA")
         guide_button.setFixedWidth(100)
@@ -389,6 +395,7 @@ class MapAppWindow(QMainWindow):
         dates_layout.addWidget(QLabel("Fecha Inicial:"), 1, 0)
         self.start_date_entry = QLineEdit(self.start_date)
         self.start_date_entry.setFixedWidth(100)
+        self.start_date_entry.setReadOnly(True)
         date_entry_layout1 = QHBoxLayout()
         date_entry_layout1.addWidget(self.start_date_entry)
                 
@@ -403,6 +410,7 @@ class MapAppWindow(QMainWindow):
         dates_layout.addWidget(QLabel("Fecha Final:"), 2, 0)
         self.end_date_entry = QLineEdit(self.end_date)
         self.end_date_entry.setFixedWidth(100)
+        self.end_date_entry.setReadOnly(True)
         date_entry_layout2 = QHBoxLayout()
         date_entry_layout2.addWidget(self.end_date_entry)
                 
@@ -418,6 +426,7 @@ class MapAppWindow(QMainWindow):
         dates_layout.addWidget(QLabel("Fecha Inicial Alt.:"), 1, 2)
         self.diff_start_date_entry = QLineEdit(self.diff_start_date)
         self.diff_start_date_entry.setFixedWidth(100)
+        self.diff_start_date_entry.setReadOnly(True)
         self.diff_start_label = dates_layout.itemAtPosition(1, 2).widget()  # Guardar referencia
         
         date_entry_layout3 = QHBoxLayout()
@@ -434,6 +443,7 @@ class MapAppWindow(QMainWindow):
         dates_layout.addWidget(QLabel("Fecha Final Alt.:"), 2, 2)
         self.diff_end_date_entry = QLineEdit(self.diff_end_date)
         self.diff_end_date_entry.setFixedWidth(100)
+        self.diff_end_date_entry.setReadOnly(True)
         self.diff_end_label = dates_layout.itemAtPosition(2, 2).widget()  # Guardar referencia
         
         date_entry_layout4 = QHBoxLayout()
@@ -640,7 +650,9 @@ class MapAppWindow(QMainWindow):
             </ol>
         </div>
         """
-        m.get_root().html.add_child(folium.Element(instructions_html))
+
+        if self.show_instructions:
+            m.get_root().html.add_child(folium.Element(instructions_html))
         
         # Añadir JavaScript para recuperar los polígonos dibujados
         js = """
@@ -859,19 +871,56 @@ class MapAppWindow(QMainWindow):
             self.results_text.append("No hay coordenadas para guardar.")
             return
         
+        # Obtener la ruta base del proyecto (asumiendo desde LAND_PROCESSING/src/)
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+
+        # ---------------------
+        # Exportar archivo JSON
+        # ---------------------
+
+        save_dir = os.path.join(base_dir, "data/exports/")
+
+        # Crear la carpeta si no existe
+        os.makedirs(save_dir, exist_ok=True)
+
         # Guardar en formato JSON personalizado
-        output_file_json = "coordenadas_poligono.json"
+        output_file_json = f"{save_dir}coordenadas_poligono.json"
         with open(output_file_json, 'w') as f:
             json.dump({"polygons": self.polygons}, f, indent=4)
-        
+
+
+        # ---------------------
+        # Exportar archivo GEOJSON
+        # ---------------------
+
+        save_dir = os.path.join(base_dir, "data/temp/source/")
+
+        # Limpiar la carpeta eliminando todo su contenido
+        if os.path.exists(save_dir):
+            shutil.rmtree(save_dir)  # Elimina la carpeta y su contenido
+
+        # Crear la carpeta si no existe
+        os.makedirs(save_dir, exist_ok=True)
+
         # Guardar en formato GeoJSON estándar
-        output_file_geojson = "coordenadas_poligono.geojson"
+        output_file_geojson = f"{save_dir}source_file.geojson"
+
+        # Obtener la ruta absoluta del archivo GeoJSON (para facilitar su uso en otros scripts)
+        abs_path_geojson = os.path.abspath(output_file_geojson)
         
         # Verificar si tenemos los datos originales de GeoJSON
         if self.geojson_data:
             with open(output_file_geojson, 'w') as f:
                 json.dump(self.geojson_data, f, indent=4)
             self.results_text.append(f"\nCoordenadas guardadas en {output_file_json} y en formato GeoJSON en {output_file_geojson}")
+
+            # Si estamos en modo generate, actualizar la caja de texto con la ruta del archivo
+            if self.generate_mode:
+                self.generator_textbox.setText(os.path.basename(output_file_geojson))
+                self.generator_textbox.setToolTip(abs_path_geojson)  # Mostrar ruta completa como tooltip
+                
+                # Almacenar la ruta del archivo para usarla en process_data
+                self.generated_file_path = abs_path_geojson
         else:
             # Crear un GeoJSON a partir de las coordenadas extraídas
             geojson = {
@@ -902,9 +951,17 @@ class MapAppWindow(QMainWindow):
             
             self.results_text.append(f"\nCoordenadas guardadas en {output_file_json} y en formato GeoJSON en {output_file_geojson}")
             
+            # Si estamos en modo generate, actualizar la caja de texto con la ruta del archivo
+            if self.generate_mode:
+                self.generator_textbox.setText(os.path.basename(output_file_geojson))
+                self.generator_textbox.setToolTip(abs_path_geojson)  # Mostrar ruta completa como tooltip
+                
+                # Almacenar la ruta del archivo para usarla en process_data
+                self.generated_file_path = abs_path_geojson
+            
             # Si estamos en modo import, actualizar el campo de búsqueda con la ruta del archivo
             if self.import_mode:
-                self.imported_file_path = output_file_geojson
+                self.imported_file_path = abs_path_geojson
                 self.search_entry.setText(os.path.basename(output_file_geojson))
 
     def show_guide(self):
@@ -923,11 +980,20 @@ class MapAppWindow(QMainWindow):
     def toggle_generate_mode(self, checked):
         """Cambia entre modo generate e import"""
         self.generate_mode = checked
-        self.generator_button.setEnabled(checked)
+
+        # Si se activa el modo de generación, habilitar herramientas de dibujo
+        if checked:
+            self.draw_options['polygon'] = True
+            self.edit_options['remove'] = True
+            self.extract_button.setEnabled(True)  # Activar el botón de extraer coordenadas
+            self.show_instructions = True
+        else:
+            self.draw_options['polygon'] = False
+            self.edit_options['remove'] = False
+            self.extract_button.setEnabled(False)
+            self.show_instructions = False
         
-        # Cambiar valores de polygon y remove y actualiza el mapa
-        self.draw_options['polygon'] = False
-        self.edit_options['remove'] = False
+        # Actualizar el mapa con las nuevas herramientas
         self.update_map()
     
     def toggle_path_row(self, checked):
@@ -1010,15 +1076,36 @@ class MapAppWindow(QMainWindow):
         )
         
         if file_path:
-            # Actualizar el campo de texto con la ruta del archivo
-            self.imported_file_path = file_path
+            # Obtener la ruta base del proyecto (asumiendo desde LAND_PROCESSING/src/)
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+            save_dir = os.path.join(base_dir, "data/temp/source/")
+
+            # Limpiar la carpeta eliminando todo su contenido
+            if os.path.exists(save_dir):
+                shutil.rmtree(save_dir)  # Elimina la carpeta y su contenido
+
+            # Crear la carpeta si no existe
+            os.makedirs(save_dir, exist_ok=True)
+
+            # Obtener la extensión del archivo original
+            _, file_extension = os.path.splitext(file_path)
+
+            nuevo_nombre = f"source_file{file_extension}"
+
+            # Definir la nueva ruta donde se guardará el archivo
+            new_path = os.path.join(save_dir, nuevo_nombre)
+
+            # Copiar el archivo a la nueva ubicación con el nuevo nombre
+            shutil.copy(file_path, new_path)
+
+            # Actualizar la variable y el campo de texto con la nueva ruta
+            self.imported_file_path = new_path
             self.search_entry.setText(os.path.basename(file_path))
-            self.results_text.append(f"Archivo importado: {file_path}")
+            self.results_text.append(f"Archivo importado y guardado en: {new_path}")
     
     def open_polygon_generator(self):
         """Abre la interfaz de generación de polígonos"""
         self.results_text.append("Utilizando el generador de polígonos integrado")
-        self.generator_button.setEnabled(False) # Desactiva el botón Generador
         self.extract_button.setEnabled(True) # Activa el botón Extraer Coordenadas
         
         # Cambiar valores de polygon y remove y actualiza el mapa
@@ -1055,6 +1142,7 @@ class MapAppWindow(QMainWindow):
         
         # Obtener valores
         config = {
+            "file_path": "../../data/temp/source/",
             "import_mode": self.import_mode,
             "generate_mode": self.generate_mode,
             "path_row_mode": self.path_row_mode,
@@ -1066,9 +1154,11 @@ class MapAppWindow(QMainWindow):
             "diff_start_date": diff_start_date,
             "diff_end_date": diff_end_date,
             "cloud_cover": self.cloud_cover_value,
-            "platform": self.platform_combo.currentText(),
             "selected_indices": self.selected_indices,
-            "imported_file": os.path.basename(self.imported_file_path) if self.imported_file_path else ""
+            "imported_file": os.path.basename(self.imported_file_path) if self.imported_file_path else "",
+            "platform": self.platform_combo.currentText(),
+            "collections": ["landsat-c2l2-sr"],
+            "limit": 100
         }
         
         # Exportar configuración
