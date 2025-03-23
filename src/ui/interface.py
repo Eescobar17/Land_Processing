@@ -3,6 +3,7 @@ import json
 import tempfile
 import shutil
 import folium
+from datetime import datetime
 from folium.plugins import Draw
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QPushButton, QTextEdit,
                              QVBoxLayout, QHBoxLayout, QFrame, QLabel, QRadioButton,
@@ -11,8 +12,13 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QPushButton, QTextEdit,
 from PyQt5.QtCore import Qt, QUrl, QDate, pyqtSignal
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtGui import QCursor
+from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtCore import QThread, pyqtSignal
 
 # Importaciones del proyecto - modificadas para estructura de módulos
+from src.controllers.landsat_controller import LandsatController
+# from src.controllers.processing_controller import ProcessingController
+
 from ..landsat.query import generate_landsat_query, fetch_stac_server
 from ..landsat.downloader import download_images
 from ..landsat.config import USGS_USERNAME, USGS_PASSWORD
@@ -157,6 +163,36 @@ class GuideDialog(QDialog):
         
         layout.addLayout(button_layout)
 
+class ProcessThread(QThread):
+    """
+    Se configura un hilo aparte para evitar el bloqueo de la interfaz.
+    """
+    result_ready = pyqtSignal(object)  # Señal para devolver los resultados
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.landsat_controller = LandsatController(config)
+        # self.processing_controller = ProcessingController(config)
+
+    def run(self):
+        """Ejecuta LandsatController y luego ProcessingController"""
+        try:
+            # 1. Ejecutar LandsatController para obtener las imágenes
+            landsat_result = self.landsat_controller.fetch_data()
+            
+            if not landsat_result:  
+                self.result_ready.emit("Error: No se encontraron imágenes.")
+                return
+            
+            # # 2. Ejecutar ProcessingController para procesarlas
+            # processing_result = self.processing_controller.process_images()
+            
+            # # 3. Emitir el resultado final
+            # self.result_ready.emit(f"Procesamiento completado: {processing_result}")
+
+        except Exception as e:
+            self.result_ready.emit(f"Error: {str(e)}")
 
 class MapAppWindow(QMainWindow):
     """
@@ -176,9 +212,10 @@ class MapAppWindow(QMainWindow):
         self.row_value = ""
         self.diff_date_enabled = False
         self.cloud_cover_value = 50
-        self.platform_value = "Landsat 8"
+        self.platform_value = "LANDSAT_8"
         self.imported_file_path = ""
         self.generated_file_path = ""
+        self.min_area_value = 10
 
         # Variable booleana para activar el panel de instrucciones del mapa
         self.show_instructions = False
@@ -488,7 +525,7 @@ class MapAppWindow(QMainWindow):
 
         platform_layout.addWidget(QLabel("Plataforma:"))
         self.platform_combo = QComboBox()
-        self.platform_combo.addItem("Landsat 8")
+        self.platform_combo.addItem("LANDSAT_8")
         self.platform_combo.setFixedWidth(120)  # Ancho fijo para controlar el tamaño
         platform_layout.addWidget(self.platform_combo)
         platform_layout.addStretch(1)  # Añadir stretch para empujar todo a la izquierda
@@ -596,7 +633,7 @@ class MapAppWindow(QMainWindow):
         
         # Añadir control de dibujo referenciando la capa donde se guardarán los elementos
         draw = Draw(
-            export=True,
+            export=False,
             draw_options=self.draw_options,
             edit_options=self.edit_options,
             feature_group=draw_items
@@ -1124,69 +1161,80 @@ class MapAppWindow(QMainWindow):
 
     def process_data(self):
         """Procesa los datos basados en la configuración actual"""
-        # Obtener valores de las entradas
-        start_date = self.start_date_entry.text()
-        end_date = self.end_date_entry.text()
-        diff_start_date = self.diff_start_date_entry.text()
-        diff_end_date = self.diff_end_date_entry.text()
         
-        # Reemplazar placeholders con cadenas vacías para el JSON
-        if start_date == "dd/mm/yyyy":
-            start_date = ""
-        if end_date == "dd/mm/yyyy":
-            end_date = ""
-        if diff_start_date == "dd/mm/yyyy":
-            diff_start_date = ""
-        if diff_end_date == "dd/mm/yyyy":
-            diff_end_date = ""
-        
-        # Obtener valores
+        def validar_fecha(fecha):
+            """Valida que la fecha tenga el formato correcto (YYYY-MM-DD)"""
+            try:
+                if fecha and fecha != "dd/mm/yyyy":
+                    return datetime.strptime(fecha, "%d/%m/%Y").strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+            return ""  # Retorna vacío si es inválida
+
+        # Obtener valores de las entradas con validación
+        start_date = validar_fecha(self.start_date_entry.text())
+        end_date = validar_fecha(self.end_date_entry.text())
+        diff_start_date = validar_fecha(self.diff_start_date_entry.text())
+        diff_end_date = validar_fecha(self.diff_end_date_entry.text())
+
+        # Obtener valores actualizados
         config = {
-            "file_path": "../../data/temp/source/",
-            "import_mode": self.import_mode,
-            "generate_mode": self.generate_mode,
-            "path_row_mode": self.path_row_mode,
-            "path": self.path_entry.text(),
-            "row": self.row_entry.text(),
+            "file_path": "../../data/temp/source/source_file.*",
+            "import_mode": getattr(self, "import_mode", False),  
+            "generate_mode": getattr(self, "generate_mode", False),
+            "path_row_mode": getattr(self, "path_row_mode", False),
+            "path": str(self.path_entry.text()).zfill(3),
+            "row": str(self.row_entry.text()).zfill(3),
             "start_date": start_date,
             "end_date": end_date,
-            "diff_date_enabled": self.diff_date_enabled,
+            "diff_date_enabled": getattr(self, "diff_date_enabled", False),
             "diff_start_date": diff_start_date,
             "diff_end_date": diff_end_date,
-            "cloud_cover": self.cloud_cover_value,
-            "selected_indices": self.selected_indices,
-            "imported_file": os.path.basename(self.imported_file_path) if self.imported_file_path else "",
-            "platform": self.platform_combo.currentText(),
+            "cloud_cover": getattr(self, "cloud_cover_value", 0),
+            "selected_indices": getattr(self, "selected_indices", []),
+            "imported_file": os.path.basename(self.imported_file_path) if getattr(self, "imported_file_path", "") else "",
+            "platform": [self.platform_combo.currentText()],
             "collections": ["landsat-c2l2-sr"],
             "limit": 100
         }
-        
-        # Exportar configuración
+
+        # Guardar configuración en JSON
         config_file = "process_config.json"
-        with open(config_file, 'w') as f:
-            json.dump(config, f, indent=4)
-        
-        # Informar al usuario
-        self.results_text.append("\n=== Procesando datos ===")
-        self.results_text.append(f"Configuración guardada en {config_file}")
-        
+        try:
+            with open(config_file, 'w') as f:
+                json.dump(config, f, indent=4)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo guardar el archivo de configuración: {str(e)}")
+            return  # Detener el proceso si hay error
+
+        # ------------------------------
         # Mostrar resumen de la configuración
-        self.results_text.append("\nResumen de configuración:")
-        self.results_text.append(f"- Modo: {'Importar archivo' if self.import_mode else 'Generar polígono' if self.generate_mode else 'Seleccionar Path/Row'}")
-        self.results_text.append(f"- Fechas: {start_date} a {end_date}")
-        if self.diff_date_enabled:
-            self.results_text.append(f"- Fechas comparativas: {diff_start_date} a {diff_end_date}")
-        self.results_text.append(f"- Cobertura de nubes: {self.cloud_cover_value}%")
-        self.results_text.append(f"- Plataforma: {self.platform_combo.currentText()}")
-        
-        if self.selected_indices:
-            self.results_text.append(f"- Índices seleccionados: {', '.join(self.selected_indices)}")
-        else:
-            self.results_text.append("- No se seleccionaron índices de reflectancia")
-            
-        if self.import_mode and self.imported_file_path:
-            self.results_text.append(f"- Archivo importado: {self.imported_file_path}")
-        elif self.import_mode:
-            self.results_text.append("- No se ha importado ningún archivo")
-        
-        self.results_text.append("\nProcesamiento iniciado...")
+        # ------------------------------
+        resumen = [
+            "\n=== Procesando datos ===",
+            f"Configuración guardada en {config_file}",
+            "\nResumen de configuración:",
+            f"- Modo: {'Importar archivo' if config['import_mode'] else 'Generar polígono' if config['generate_mode'] else 'Seleccionar Path/Row'}",
+            f"- Fechas: {config['start_date']} a {config['end_date']}",
+            f"- Fechas comparativas: {config['diff_start_date']} a {config['diff_end_date']}" if config['diff_date_enabled'] else "- No hay comparación de fechas",
+            f"- Cobertura de nubes: {config['cloud_cover']}%",
+            f"- Plataformas: {config['platform']}",
+            f"- Índices seleccionados: {', '.join(config['selected_indices'])}" if config['selected_indices'] else "- No se seleccionaron índices de reflectancia",
+            f"- Archivo importado: {config['imported_file']}" if config['import_mode'] and config['imported_file'] else "- No se ha importado ningún archivo",
+            "\n=== Iniciando procesamiento de datos ==="
+        ]
+
+        self.results_text.clear()
+        self.results_text.append("\n".join(resumen))
+
+        # ------------------------------------------
+        # Procesar datos mediante hilo independiente
+        # ------------------------------------------
+
+        self.thread = ProcessThread(config)
+        self.thread.result_ready.connect(self.handle_result)
+        self.thread.start()
+
+    def handle_result(self, result):
+        """Muestra un mensaje cuando finaliza el proceso"""
+        QMessageBox.information(self, "Proceso finalizado", f"Datos obtenidos: {result}")
