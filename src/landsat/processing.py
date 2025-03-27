@@ -1,25 +1,14 @@
 import os
 import traceback
 import pandas as pd
-import numpy as np
 from shapely.ops import unary_union
-from datetime import datetime, timedelta
+from datetime import datetime
 import geopandas as gpd
-from shapely.geometry import shape, mapping, Polygon
-import numpy as np
+from shapely.geometry import shape, Polygon
 import matplotlib.pyplot as plt
-import os
-import requests
-import itertools
-import json
-import geopandas as gpd
 import glob
-import os
 from pathlib import Path
-import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from matplotlib.colors import LinearSegmentedColormap
-import numpy as np
 import matplotlib
 from adjustText import adjust_text
 
@@ -416,8 +405,12 @@ def process_metadata(features, min_area=0):
     Procesa los datos según la configuración actual.
     
     Returns:
-        bool: True si el procesamiento fue exitoso, False en caso contrario
+        msg: Mensaje para informar sobre el proceso
+        scenes: Ids de las escenas necesarias a descargar
     """
+
+    msg = ""
+    scenes = dict()
 
     # Ruta basada en la ubicación del script
     script_dir = Path(__file__).parent  # Carpeta donde está el script
@@ -436,16 +429,22 @@ def process_metadata(features, min_area=0):
     # Se selecciona el primer archivo
     relative_path = files[0]
 
-    try:        
+    try:
         if not features:
-            print("No se encontraron imágenes con los criterios especificados.")
-            print("\nSugerencias:")
-            print("1. Amplía el rango de fechas")
-            print("2. Aumenta el porcentaje de cobertura de nubes permitido")
-            print("3. Verifica que el polígono está en un área con cobertura Landsat")
-            return False
+            msg = """No se encontraron imágenes con los criterios especificados.
+            \nSugerencias:
+            1. Amplía el rango de fechas.
+            2. Aumenta el porcentaje de cobertura de nubes permitido.
+            3. Verifica que el polígono está en un área con cobertura Landsat.
+            """
+            print(msg)
+            yield msg
+            return scenes
         
-        print(f"\nSe encontraron {len(features)} imágenes que cumplen con los criterios.")
+        msg = f"Se encontraron {len(features)} imágenes que cumplen con los criterios."
+        print(msg)
+        # message += msg
+        yield msg
         
         # 6. Mostrar información de las imágenes encontradas
         print("\nInformación de las imágenes encontradas (hasta 50):")
@@ -469,12 +468,18 @@ def process_metadata(features, min_area=0):
         
         # 7. Analizar cobertura y descargar las escenas necesarias
         if len(features) > 0:
-            print("\nAnalizando cobertura del polígono...")
+            msg = "\nAnalizando cobertura del polígono..."
+            print(msg)
+            # message += msg
+            yield msg
             
             # Analizar la cobertura
             coverage_info = analyze_coverage(relative_path, features, min_area)
-            print(f"Cobertura total: {coverage_info['total_coverage_percent']:.2f}%")
-            print(f"Se necesitan {len(coverage_info['scenes_needed'])} escenas para cubrir el polígono")
+
+            msg = f"""\nCobertura total: {coverage_info['total_coverage_percent']:.2f}%\nSe necesitan {len(coverage_info['scenes_needed'])} escenas para cubrir el polígono"""
+            print(msg)
+            # message += msg
+            yield msg
 
             # Obtener las escenas necesarias para la cobertura óptima
             scenes_needed = coverage_info['scenes_needed']
@@ -482,50 +487,19 @@ def process_metadata(features, min_area=0):
 
             # Generar visualización de cobertura
             coverage_map = visualize_coverage(relative_path, features, scenes_needed, coverage_percent)
-            print(f"Mapa de cobertura generado: {coverage_map}")
-            
-            # # Preguntar al usuario si desea descargar todas las escenas necesarias
-            # user_input = input("\n¿Descargar todas las escenas necesarias? (s/n): ")
-            
-            # if user_input.lower() == 's':
-            #     # Descargar todas las escenas necesarias
-            #     print("\nDescargando las escenas necesarias...")
-            #     download_path = "data/downloads/complete_coverage"
-            #     os.makedirs(download_path, exist_ok=True)
-                
-            #     # Pasar los índices seleccionados a download_optimal_scenes
-            #     downloaded_files = download_optimal_scenes(file_path, features, download_path, selected_indices)
-                
-            #     if downloaded_files:
-            #         print(f"\nSe descargaron {len(downloaded_files)} escenas con éxito")
-            #         return True
-            #     else:
-            #         print("Error al descargar las escenas necesarias")
-            #         return False
-            # else:
-            #     # Descargar solo la primera escena (comportamiento original)
-            #     print("\nDescargando solo la primera escena...")
-            #     if selected_indices:
-            #         required_bands = determine_required_bands(selected_indices)
-            #         base_path = download_selective_bands(features[0], required_bands)
-                    
-            #         if base_path:
-            #             try:
-            #                 results = process_selected_indices(base_path, selected_indices)
-            #                 return True
-            #             except Exception as e:
-            #                 print(f"Error al procesar índices: {str(e)}")
-            #                 traceback.print_exc()
-            #                 return False
-            #         else:
-            #             return False
-            #     else:
-            #         success = download_images([features[0]], band="B4")
-            #         return success
-                    
 
-                    
+            msg = f"\nMapa de cobertura generado: {coverage_map}"
+            print(msg)
+            # message += msg
+            yield msg
+
+            scenes = scenes_needed
+
+        yield "Proceso Finalizado"
+        return scenes
+
     except Exception as e:
-        print(f"Error durante el procesamiento: {str(e)}")
+        msg = f"Error durante el procesamiento: {str(e)}"
+        print(msg)
         traceback.print_exc()
-        return False
+        yield msg

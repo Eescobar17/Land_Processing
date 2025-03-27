@@ -61,7 +61,6 @@ class DatePickerDialog(QDialog):
         date = self.calendar.selectedDate()
         return date.toString("dd/MM/yyyy")
 
-
 class IndexTag(QFrame):
     """Widget personalizado para mostrar un índice seleccionado"""
     removed = pyqtSignal(str)
@@ -86,7 +85,6 @@ class IndexTag(QFrame):
         
     def on_remove(self):
         self.removed.emit(self.index_name)
-
 
 class GuideDialog(QDialog):
     """Diálogo para mostrar instrucciones de uso de la aplicación"""
@@ -176,21 +174,37 @@ class ProcessThread(QThread):
         # self.processing_controller = ProcessingController(config)
 
     def run(self):
-        """Ejecuta LandsatController y luego ProcessingController"""
-        try:
-            # 1. Ejecutar LandsatController para obtener las imágenes
-            landsat_result = self.landsat_controller.fetch_data()
-            
-            if not landsat_result:  
-                self.result_ready.emit("Error: No se encontraron imágenes.")
-                return
-            
-            # # 2. Ejecutar ProcessingController para procesarlas
-            # processing_result = self.processing_controller.process_images()
-            
-            # # 3. Emitir el resultado final
-            # self.result_ready.emit(f"Procesamiento completado: {processing_result}")
+        """Ejecuta LandsatController"""
 
+        try:
+            gen = self.landsat_controller.fetch_data()  # Obtiene el generador
+            
+            while True:
+                message = next(gen)  # Obtiene el siguiente mensaje
+                self.result_ready.emit(message)  # Emitir mensaje en tiempo real
+                self.msleep(100)  # Pequeña pausa para evitar saturar la interfaz
+        
+        except StopIteration as e:
+            resultado = e.value  # Captura el valor de retorno
+
+            if isinstance(resultado, tuple) and len(resultado) == 2:
+                features, scenes = resultado
+                print("Lista de diccionarios (scenes):", scenes)
+
+                indices = self.config["selected_indices"]
+                download_gen  = self.landsat_controller.download_data(features, scenes, indices)
+
+                try:
+                    while True:
+                        message = next(download_gen)  # Obtiene el siguiente mensaje
+                        self.result_ready.emit(message)  # Emitir mensaje en tiempo real
+                        self.msleep(100)  # Pequeña pausa para evitar saturar la interfaz
+                except StopIteration:
+                    print("Descarga finalizada.")
+
+            else:
+                print("Error: La función fetch_data no retornó una tupla válida")
+        
         except Exception as e:
             self.result_ready.emit(f"Error: {str(e)}")
 
@@ -669,14 +683,14 @@ class MapAppWindow(QMainWindow):
         
         # Añadir panel de instrucciones
         instructions_html = """
-        <div style="position: fixed; 
-                    bottom: 50px; 
-                    left: 50px; 
+        <div style="position: fixed;
+                    bottom: 20px;
+                    left: 20px;
                     width: 300px;
-                    padding: 10px; 
-                    background-color: white; 
-                    z-index: 9999; 
-                    border-radius: 5px; 
+                    padding: 5px;
+                    background-color: white;
+                    z-index: 9999;
+                    border-radius: 5px;
                     box-shadow: 0 0 10px rgba(0,0,0,0.3);">
             <h4>Instrucciones:</h4>
             <ol>
@@ -833,7 +847,7 @@ class MapAppWindow(QMainWindow):
                 return
                 
             # Intentar analizar el JSON
-            self.results_text.append(f"Datos recibidos: {result[:100]}...")
+            # self.results_text.append(f"Datos recibidos: {result[:100]}...")
             data = json.loads(result)
             
             # Guardar los datos GeoJSON originales para exportarlos después
@@ -915,7 +929,7 @@ class MapAppWindow(QMainWindow):
         # Exportar archivo JSON
         # ---------------------
 
-        save_dir = os.path.join(base_dir, "data/exports/")
+        save_dir = os.path.normpath(os.path.join(base_dir, "data/exports/"))
 
         # Crear la carpeta si no existe
         os.makedirs(save_dir, exist_ok=True)
@@ -930,7 +944,7 @@ class MapAppWindow(QMainWindow):
         # Exportar archivo GEOJSON
         # ---------------------
 
-        save_dir = os.path.join(base_dir, "data/temp/source/")
+        save_dir = os.path.normpath(os.path.join(base_dir, "data/temp/source/"))
 
         # Limpiar la carpeta eliminando todo su contenido
         if os.path.exists(save_dir):
@@ -1127,10 +1141,10 @@ class MapAppWindow(QMainWindow):
             # Obtener la extensión del archivo original
             _, file_extension = os.path.splitext(file_path)
 
-            nuevo_nombre = f"source_file{file_extension}"
+            new_name = f"source_file{file_extension}"
 
             # Definir la nueva ruta donde se guardará el archivo
-            new_path = os.path.join(save_dir, nuevo_nombre)
+            new_path = os.path.normpath(os.path.join(save_dir, new_name))
 
             # Copiar el archivo a la nueva ubicación con el nuevo nombre
             shutil.copy(file_path, new_path)
@@ -1211,14 +1225,14 @@ class MapAppWindow(QMainWindow):
         # Mostrar resumen de la configuración
         # ------------------------------
         resumen = [
-            "\n=== Procesando datos ===",
+            "=== Procesando datos ===",
             f"Configuración guardada en {config_file}",
             "\nResumen de configuración:",
             f"- Modo: {'Importar archivo' if config['import_mode'] else 'Generar polígono' if config['generate_mode'] else 'Seleccionar Path/Row'}",
             f"- Fechas: {config['start_date']} a {config['end_date']}",
             f"- Fechas comparativas: {config['diff_start_date']} a {config['diff_end_date']}" if config['diff_date_enabled'] else "- No hay comparación de fechas",
             f"- Cobertura de nubes: {config['cloud_cover']}%",
-            f"- Plataformas: {config['platform']}",
+            f"- Plataformas: {', '.join(config['platform'])}",
             f"- Índices seleccionados: {', '.join(config['selected_indices'])}" if config['selected_indices'] else "- No se seleccionaron índices de reflectancia",
             f"- Archivo importado: {config['imported_file']}" if config['import_mode'] and config['imported_file'] else "- No se ha importado ningún archivo",
             "\n=== Iniciando procesamiento de datos ==="
@@ -1237,4 +1251,5 @@ class MapAppWindow(QMainWindow):
 
     def handle_result(self, result):
         """Muestra un mensaje cuando finaliza el proceso"""
-        QMessageBox.information(self, "Proceso finalizado", f"Datos obtenidos: {result}")
+        # QMessageBox.information(self, "Proceso finalizado", f"Datos obtenidos: {result}")
+        self.results_text.append(result)
