@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QPushButton, QTextEdit,
                              QVBoxLayout, QHBoxLayout, QFrame, QLabel, QRadioButton,
                              QCheckBox, QLineEdit, QComboBox, QSlider, QGridLayout, QFileDialog,
                              QGroupBox, QCalendarWidget, QDialog, QDialogButtonBox)
-from PyQt5.QtCore import Qt, QUrl, QDate, pyqtSignal
+from PyQt5.QtCore import Qt, QUrl, pyqtSignal
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import QMessageBox
@@ -17,12 +17,6 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 # Importaciones del proyecto - modificadas para estructura de módulos
 from src.controllers.landsat_controller import LandsatController
-# from src.controllers.processing_controller import ProcessingController
-
-from ..landsat.query import generate_landsat_query, fetch_stac_server
-from ..landsat.downloader import download_images
-from ..landsat.config import USGS_USERNAME, USGS_PASSWORD
-
 
 class DatePickerDialog(QDialog):
     """Diálogo para seleccionar una fecha"""
@@ -171,7 +165,6 @@ class ProcessThread(QThread):
         super().__init__()
         self.config = config
         self.landsat_controller = LandsatController(config)
-        # self.processing_controller = ProcessingController(config)
 
     def run(self):
         """Ejecuta LandsatController"""
@@ -187,24 +180,21 @@ class ProcessThread(QThread):
         except StopIteration as e:
             resultado = e.value  # Captura el valor de retorno
 
-            if isinstance(resultado, tuple) and len(resultado) == 2:
-                features, scenes = resultado
-                print("Lista de diccionarios (scenes):", scenes)
+            features, scenes = resultado
+            print("Lista de diccionarios (scenes):", scenes)
 
-                indices = self.config["selected_indices"]
-                download_gen  = self.landsat_controller.download_data(features, scenes, indices)
+            indices = self.config["selected_indices"]
+            download_gen  = self.landsat_controller.download_data(features, scenes, indices)
 
-                try:
-                    while True:
-                        message = next(download_gen)  # Obtiene el siguiente mensaje
-                        self.result_ready.emit(message)  # Emitir mensaje en tiempo real
-                        self.msleep(100)  # Pequeña pausa para evitar saturar la interfaz
-                except StopIteration:
-                    print("Descarga finalizada.")
+            try:
+                while True:
+                    message = next(download_gen)  # Obtiene el siguiente mensaje
+                    self.result_ready.emit(message)  # Emitir mensaje en tiempo real
+                    self.msleep(100)  # Pequeña pausa para evitar saturar la interfaz
+            except StopIteration:
+                self.result_ready.emit((message, True))
+                print("Descarga finalizada.")
 
-            else:
-                print("Error: La función fetch_data no retornó una tupla válida")
-        
         except Exception as e:
             self.result_ready.emit(f"Error: {str(e)}")
 
@@ -599,12 +589,12 @@ class MapAppWindow(QMainWindow):
         process_frame = QWidget()
         process_layout = QHBoxLayout(process_frame)
         
-        process_button = QPushButton("PROCESAR DATOS")
-        process_button.setObjectName("process_button")  # Añadir objectName para poder encontrarlo luego
-        process_button.setFixedSize(150, 50)
-        process_button.setStyleSheet("font-weight: bold; font-size: 14px;")
-        process_button.clicked.connect(self.process_data)
-        process_layout.addWidget(process_button)
+        self.process_button = QPushButton("PROCESAR DATOS")
+        self.process_button.setObjectName("process_button")  # Añadir objectName para poder encontrarlo luego
+        self.process_button.setFixedSize(150, 50)
+        self.process_button.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.process_button.clicked.connect(self.process_data)
+        process_layout.addWidget(self.process_button)
         process_layout.addStretch()
         
         results_layout.addWidget(process_frame)
@@ -1241,6 +1231,8 @@ class MapAppWindow(QMainWindow):
         self.results_text.clear()
         self.results_text.append("\n".join(resumen))
 
+        self.process_button.setEnabled(False) # Se desactiva para evitar ejecuciones paralelas
+
         # ------------------------------------------
         # Procesar datos mediante hilo independiente
         # ------------------------------------------
@@ -1250,6 +1242,13 @@ class MapAppWindow(QMainWindow):
         self.thread.start()
 
     def handle_result(self, result):
-        """Muestra un mensaje cuando finaliza el proceso"""
-        # QMessageBox.information(self, "Proceso finalizado", f"Datos obtenidos: {result}")
-        self.results_text.append(result)
+        """Muestra un mensaje cuando finaliza el proceso y habilita el botón si es necesario"""
+        
+        if isinstance(result, tuple) and len(result) == 2:
+            message, enable_button = result  # Desempaquetar la tupla
+            self.results_text.append(message)  # Agregar mensaje a la interfaz
+
+            if enable_button:
+                self.process_button.setEnabled(True)  # Habilitar el botón si el proceso terminó
+        else:
+            self.results_text.append(str(result))  # Si no es una tupla, solo mostrar el mensaje

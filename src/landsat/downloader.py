@@ -57,7 +57,7 @@ def determine_required_bands(selected_indices):
     
     return list(required_bands)
 
-def download_selective_bands(feature, required_bands, download_path):
+def download_selective_bands(feature, required_bands, download_path, session):
     """
     Descarga solo las bandas específicas de una imagen Landsat.
     
@@ -65,13 +65,10 @@ def download_selective_bands(feature, required_bands, download_path):
         feature: Característica (feature) de Landsat
         required_bands: Lista de bandas requeridas (e.g., ["B2", "B4", "B5"])
         download_path: Ruta donde guardar las imágenes descargadas
-        
+        session: Sesión iniciada en USGS
     Returns:
         str: Ruta base para los archivos descargados, o None si falló
     """
-    
-    # Iniciar sesión en USGS
-    session = login_usgs()
     
     # Verificar si tiene assets
     if 'assets' not in feature:
@@ -184,6 +181,36 @@ def download_selective_bands(feature, required_bands, download_path):
         except Exception as e:
             print(f"Error al descargar la banda {band}: {str(e)}")
             all_successful = False
+
+        # ------------------
+        # Descargar Metadata
+        # ------------------
+
+        # Crear el nombre del archivo local
+        file_name = os.path.join(download_path, f"{scene_id.split('_SR')[0]}_MTL.json")
+        download_url = feature['assets']['MTL.json']['href']
+        print(f"Descargando: {os.path.basename(file_name)}")
+
+        try:
+            # Descargar la imagen con autenticación
+            with session.get(download_url, stream=True) as response:
+                response.raise_for_status()
+                total_size = int(response.headers.get('content-length', 0))
+                
+                with open(file_name, 'wb') as file:
+                    downloaded = 0
+                    for chunk in response.iter_content(chunk_size=8192):
+                        file.write(chunk)
+                        downloaded += len(chunk)
+                        # Mostrar progreso cada 20%
+                        if total_size > 0 and downloaded % (total_size // 5) < 8192:
+                            percent = (downloaded / total_size) * 100
+                            print(f"Progreso: {percent:.1f}%")
+            
+            print(f"Descargado: {file_name}")
+        except Exception as e:
+            print(f"Error al descargar la metadata")
+            all_successful = False
     
     # Verificar que se descargaron todas las bandas requeridas
     if all_successful:
@@ -206,6 +233,9 @@ def download_images(features, scenes_needed, required_bands):
     os.makedirs(download_path, exist_ok=True)
 
     downloaded_scenes = []
+
+    # Iniciar sesión en USGS
+    session = login_usgs()
     
     for i, scene_info in enumerate(scenes_needed):
         # Buscar la característica correspondiente en la lista original
@@ -225,7 +255,7 @@ def download_images(features, scenes_needed, required_bands):
             os.makedirs(scene_dir, exist_ok=True)
             
             # Descargar todas las bandas requeridas
-            base_path = download_selective_bands(target_feature, required_bands, download_path)
+            base_path = download_selective_bands(target_feature, required_bands, scene_dir, session)
             
             if base_path:
                 print(f"Escena {scene_id} descargada correctamente con todas las bandas requeridas")

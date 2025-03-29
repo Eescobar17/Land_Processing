@@ -329,9 +329,10 @@ config = {
 
 query = generate_landsat_query(**config)
 features = fetch_stac_server(query)
-df = analyze_coverage(features, 0)
+# df = analyze_coverage(features, 0)
 
-print(len(df))
-print("\n\n")
-print(df)
+# print(len(df))
+# print("\n\n")
+# print(df)
 
+print(features[0]['assets']['MTL.json']['href'])
