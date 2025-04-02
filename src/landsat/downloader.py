@@ -5,17 +5,19 @@ from .config import USGS_USERNAME, USGS_PASSWORD
 from pathlib import Path
 import traceback
 
+
+
 LOGIN_URL = "https://ers.cr.usgs.gov/login"
 
 def login_usgs():
-    """Logs into the USGS system and returns an authenticated session."""
+    """ Logs into the USGS system and returns an authenticated session."""
     session = requests.Session()
     
     # Get the login page to extract the CSRF token
     response = session.get(LOGIN_URL)
     response.raise_for_status()
     
-    soup = BeautifulSoup(response.content, 'html5lib')
+    soup = BeautifulSoup(response.content, 'html.parser')
     csrf_token = soup.find('input', attrs={'name': 'csrf'})['value']
 
     # Login form data
@@ -35,7 +37,7 @@ def login_usgs():
         print("Authentication failed")
 
     return session
-
+ 
 def determine_required_bands(selected_indices):
    
     required_bands = set()

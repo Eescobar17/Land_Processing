@@ -12,8 +12,9 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QPushButton, QTextEdit,
 from PyQt5.QtCore import Qt, QUrl, pyqtSignal
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtGui import QCursor
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import QThread, pyqtSignal, QTimer
 from pathlib import Path
+
 
 # Importaciones del proyecto - modificadas para estructura de módulos
 from src.controllers.landsat_controller import LandsatController, ProcessingController
@@ -203,45 +204,72 @@ class ProcessThread(QThread):
             self.error_occurred.emit(str(e))
 
 class SecondProcessThread(QThread):
+    """
+    Hilo para procesar la generación de mosaicos y el cálculo de índices.
+    Este hilo maneja las operaciones de procesamiento intensivo sin bloquear la interfaz.
+    """
     result_ready = pyqtSignal(object)
     error_occurred = pyqtSignal(str)
+    progress_updated = pyqtSignal(int)  # Señal para actualizar una barra de progreso (opcional)
 
     def __init__(self, config):
         super().__init__()
         self.config = config
         self.processing_controller = ProcessingController(config)
+        self.stopped = False
 
     def run(self):
-        
+        """Ejecuta la secuencia de procesamiento"""
         try:
-            gen = self.processing_controller.generate_mosaics()  # Obtiene el generador
+            # Paso 1: Generar mosaicos y recortes
+            self.result_ready.emit("Iniciando generación de mosaicos...")
+            mosaic_generator = self.processing_controller.generate_mosaics()
+            self._process_generator(mosaic_generator, "Generando mosaicos")
             
-            while True:
-                message = next(gen)  # Obtiene el siguiente mensaje
-                self.result_ready.emit(message)  # Emitir mensaje en tiempo real
-                self.msleep(100)  # Pequeña pausa para evitar saturar la interfaz
-
-        # except StopIteration as e:
-
-        #     try:
-        #         indices = self.config["selected_indices"]
-        #         calculate_gen = self.processing_controller.calculate_indices(indices)
+            # Verificar si el proceso debe detenerse
+            if self.stopped:
+                return
                 
-        #         while True:
-        #             message = next(calculate_gen)  # Obtiene el siguiente mensaje
-        #             self.result_ready.emit(message)  # Emitir mensaje en tiempo real
-        #             self.msleep(100)  # Pequeña pausa para evitar saturar la interfaz
+            # Paso 2: Calcular índices a partir de los recortes
+            self.result_ready.emit("\nIniciando cálculo de índices...")
+            indices = self.config["selected_indices"]
+            indices_generator = self.processing_controller.calculate_indices(indices)
+            self._process_generator(indices_generator, "Calculando índices")
             
-        #     except StopIteration:
-        #         message =  "\nProcesamiento Finalizado."
-        #         self.result_ready.emit((message, True))
+            # Mensaje final
+            self.result_ready.emit("\nProcesamiento completado exitosamente.")
             
-        #     except Exception as e:
-        #         self.error_occurred.emit(str(e))
-
         except Exception as e:
-            print("****************** ERROR ***************************")
+            import traceback
+            error_msg = f"Error en el procesamiento: {str(e)}\n{traceback.format_exc()}"
+            print(error_msg)
             self.error_occurred.emit(str(e))
+    
+    def _process_generator(self, generator, stage_name):
+        """Procesa un generador y emite los mensajes intermedios"""
+        try:
+            progress = 0
+            while not self.stopped:
+                try:
+                    message = next(generator)
+                    self.result_ready.emit(message)
+                    
+                    # Actualizar progreso (aproximado)
+                    progress += 1
+                    if progress % 5 == 0:  # cada 5 mensajes
+                        self.progress_updated.emit(min(progress, 100))
+                        
+                    # Pequeña pausa para evitar bloqueos de la interfaz
+                    self.msleep(10)
+                    
+                except StopIteration:
+                    break
+        except Exception as e:
+            self.error_occurred.emit(f"Error en {stage_name}: {str(e)}")
+    
+    def stop(self):
+        """Detiene el hilo de forma segura"""
+        self.stopped = True
 
 class MapAppWindow(QMainWindow):
     """
@@ -252,6 +280,108 @@ class MapAppWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Herramienta de Procesamiento Geoespacial")
         self.setGeometry(50, 50, 1400, 800)
+        # Estilos para la aplicación
+        stylesheet = """
+        QMainWindow, QWidget {
+            background-color: #3E2723;  /* Café más oscuro para el fondo */
+            color: #F5F5F5;
+        }
+        
+        QPushButton {
+            background-color: #66BB6A;
+            color: white;
+            border-radius: 4px;
+            padding: 6px;
+            font-weight: bold;
+        }
+        
+        QPushButton:hover {
+            background-color: #11ad17;
+        }
+        
+        QPushButton:disabled {
+            background-color: #795548;
+            color: #D7CCC8;
+        }
+        
+        QPushButton#process_button, QPushButton#calculate_indices {
+            background-color: #4CAF50;
+            font-size: 14px;
+        }
+        
+        QPushButton#extract_button, QPushButton#save_button {
+            background-color: #FF9800;
+        }
+        
+        QLineEdit, QComboBox {
+            background-color: #5D4037;  /* Café más claro para los campos de entrada */
+            color: #FFFFFF;
+            border: 1px solid #8D6E63;
+            border-radius: 3px;
+            padding: 3px;
+        }
+        
+        QTextEdit {
+            background-color: #2D1E1A;  /* Café muy oscuro para áreas de texto */
+            color: #E0E0E0;
+            border: 1px solid #8D6E63;
+            font-family: 'Consolas', 'Courier New', monospace;
+            selection-background-color: #FF9800;
+            selection-color: #000000;
+        }
+        
+        QFrame, QGroupBox {
+            border: 1px solid #8D6E63;
+            border-radius: 5px;
+        }
+        
+        QGroupBox {
+            margin-top: 12px;
+        }
+        
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            subcontrol-position: top center;
+            padding: 0 5px;
+            color: #FFA726;
+            font-weight: bold;
+        }
+        
+        QSlider::groove:horizontal {
+            border: 1px solid #8D6E63;
+            height: 8px;
+            background: #5D4037;
+            margin: 2px 0;
+            border-radius: 4px;
+        }
+        
+        QSlider::handle:horizontal {
+            background: #FF9800;
+            border: 1px solid #8D6E63;
+            width: 18px;
+            margin: -2px 0;
+            border-radius: 4px;
+        }
+        
+        QComboBox::drop-down {
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 15px;
+            border-left-width: 1px;
+            border-left-color: darkgray;
+            border-left-style: solid;
+            border-top-right-radius: 3px;
+            border-bottom-right-radius: 3px;
+        }
+        
+        /* Estilo para los campos específicos de importar/generar */
+        QLineEdit#search_entry, QLineEdit#generator_textbox {
+            background-color: #6D4C41;  /* Café para estos cuadros específicos */
+        }
+        """
+        
+        # Aplicar estilos
+        self.setStyleSheet(stylesheet)
         
         # Variables para almacenar los valores de configuración
         self.import_mode = True
@@ -362,6 +492,7 @@ class MapAppWindow(QMainWindow):
     def setup_control_panel(self):
         """Configura el panel izquierdo con controles"""
         # Panel de control izquierdo
+        
         self.control_panel = QFrame()
         self.control_panel.setFrameStyle(QFrame.Box | QFrame.Sunken)
         self.control_panel_layout = QVBoxLayout(self.control_panel)
@@ -379,10 +510,11 @@ class MapAppWindow(QMainWindow):
         self.import_radio.setChecked(True)
         self.import_radio.toggled.connect(self.toggle_import_mode)
         options_layout.addWidget(self.import_radio, 0, 0, 1, 4)
-
+        
+        
         self.search_entry = QLineEdit()
         self.search_entry.setCursor(QCursor(Qt.PointingHandCursor))
-        self.search_entry.setStyleSheet("background-color: #F0F0F0;")
+        #self.search_entry.setStyleSheet("background-color: #F0F0F0;")
         self.search_entry.setReadOnly(True)
         self.search_entry.mousePressEvent = lambda e: self.import_file()
         self.search_entry.setMinimumWidth(100)
@@ -404,7 +536,7 @@ class MapAppWindow(QMainWindow):
         self.generator_textbox = QLineEdit()
         self.generator_textbox.setReadOnly(True)
         self.generator_textbox.setPlaceholderText("GeoJSON...")
-        self.generator_textbox.setStyleSheet("background-color: #F0F0F0;")
+        #self.generator_textbox.setStyleSheet("background-color: #F0F0F0;")
         options_layout.addWidget(self.generator_textbox, 1, 4, 1, 2)
 
         # ------------------------
@@ -1351,8 +1483,115 @@ class MapAppWindow(QMainWindow):
         print(f"Se produjo un error en el hilo: {error_message}")
         self.process_button.setEnabled(True)
         self.generate_error("Error", error_message)
-
+        
     def calculate_indices(self):
+        """
+        Ejecuta el proceso de generación de mosaicos, recortes y cálculo de índices.
+        Utiliza un hilo separado para mantener la interfaz responsiva.
+        """
+        # Deshabilitar el botón mientras se procesa para evitar múltiples ejecuciones
+        self.calculate_button.setEnabled(False)
+        self.process_button.setEnabled(False)
+        
+        self.results_text.append("\n=== Iniciando proceso de cálculo de índices ===")
+        self.results_text.append("Generando mosaicos y recortes de imágenes...")
+        
+        # Configurar el hilo para el procesamiento
+        config = {
+            "selected_indices": self.selected_indices
+        }
+        
+        # Crear y configurar el hilo
+        self.second_thread = SecondProcessThread(config)
+        self.second_thread.result_ready.connect(self.handle_second_result)
+        self.second_thread.error_occurred.connect(self.handle_second_error)
+        self.second_thread.finished.connect(self.on_indices_calculation_finished)
+        
+        # Iniciar el hilo
+        self.second_thread.start()
+    
+    
+        
+    def handle_second_result(self, result):
+        """Muestra un mensaje cuando se recibe un resultado del segundo hilo"""
+        if isinstance(result, tuple) and len(result) == 2:
+            message, _ = result  # Desempaquetar la tupla
+            self.results_text.append(message)
+        else:
+            message = str(result)
+            self.results_text.append(message)
+            
+            # Detectar si se ha completado un índice específico
+            for index in self.selected_indices:
+                if f"Índice {index} guardado en" in message:
+                    # Esperar un momento para asegurar que la imagen se ha guardado completamente
+                    QTimer.singleShot(500, lambda idx=index: self.show_index_image(idx))
+        
+    def handle_second_error(self, error_message):
+        """Maneja errores del segundo hilo"""
+        print(f"Se produjo un error en el hilo de cálculo: {error_message}")
+        self.process_button.setEnabled(True)
+        self.calculate_button.setEnabled(True)
+        self.generate_error("Error en Cálculo de Índices", error_message)  
+        
+    def on_indices_calculation_finished(self):
+        """Método llamado cuando finaliza el cálculo de índices"""
+        self.results_text.append("\n=== Proceso de cálculo de índices completado ===")
+        self.process_button.setEnabled(True)
+        self.calculate_button.setEnabled(True)
+        
+        # Mostrar las imágenes de los índices calculados
+        # Dar un pequeño retraso para asegurar que todas las imágenes estén guardadas
+        QTimer.singleShot(1000, self.show_calculated_indices)
+    
+    def show_calculated_indices(self):
+        """Muestra todas las imágenes de índices calculados en ventanas emergentes"""
+        script_dir = Path(__file__).parent
+        indices_dir = script_dir.parent.parent / "data" / "exports" / "indices"
+        
+        if not os.path.exists(indices_dir):
+            self.results_text.append("No se encontró el directorio de índices")
+            return
+            
+        # Buscar las imágenes PNG generadas
+        for index in self.selected_indices:
+            image_path = indices_dir / f"{index}.png"
+            
+            if os.path.exists(image_path):
+                self.show_index_image(index)
+            else:
+                self.results_text.append(f"No se encontró la imagen para el índice {index}")     
+        
+    def show_index_image(self, index_name):
+        """Muestra la imagen de un índice en una ventana emergente"""
+        # Construir la ruta a la imagen del índice
+        script_dir = Path(__file__).parent
+        image_path = script_dir.parent.parent / "data" / "exports" / "indices" / f"{index_name}.png"
+        
+        if not os.path.exists(image_path):
+            self.results_text.append(f"No se encontró la imagen para el índice {index_name}")
+            return
+        
+        # Crear una ventana emergente usando PyQt
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel
+        from PyQt5.QtGui import QPixmap
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Visualización del Índice {index_name}")
+        dialog.setMinimumSize(800, 600)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Crear etiqueta para mostrar la imagen
+        image_label = QLabel()
+        pixmap = QPixmap(str(image_path))
+        image_label.setPixmap(pixmap.scaled(780, 580, Qt.KeepAspectRatio))
+        layout.addWidget(image_label)
+        
+        # Mostrar la ventana
+        dialog.show()
+"""
+   def calculate_indices(self):
         from ..landsat import generate_mosaics_and_clips
 
         generate_mosaics_and_clips()
@@ -1370,7 +1609,7 @@ class MapAppWindow(QMainWindow):
         # self.second_thread.start()
 
     def handle_second_result(self, result):
-        """Muestra un mensaje cuando finaliza el proceso y habilita el botón si es necesario"""
+        # Muestra un mensaje cuando finaliza el proceso y habilita el botón si es necesario
         
         if isinstance(result, tuple) and len(result) == 2:
             message, _ = result  # Desempaquetar la tupla
@@ -1381,3 +1620,7 @@ class MapAppWindow(QMainWindow):
     def handle_second_error(self, error_message):
         print(f"Se produjo un error en el hilo: {error_message}")
         self.generate_error("Error", error_message)
+        
+"""
+
+    
