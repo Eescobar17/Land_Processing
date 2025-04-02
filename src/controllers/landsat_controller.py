@@ -1,6 +1,4 @@
-from ..landsat.query import generate_landsat_query, fetch_stac_server
-from ..landsat.downloader import determine_required_bands, download_images
-from ..landsat.processing import process_metadata
+from ..landsat import generate_landsat_query, fetch_stac_server, determine_required_bands, download_images, process_metadata, generate_mosaics_and_clips, process_indices_from_cutouts_wrapper
 
 class LandsatController:
     """Controlador para gestionar la búsqueda y descarga de imágenes Landsat."""
@@ -28,10 +26,30 @@ class LandsatController:
     def download_data(self, features, scenes, indices):
         """Descarga los archivos .tif según las escenas obtenidos."""
         
-        yield "Obteniendo bandas necesarias para los índices seleccionados...\n"
+        yield "\nObteniendo bandas necesarias para los índices seleccionados...\n"
         required_bands = determine_required_bands(indices)
 
-        yield "Descargando bandas espectrales...\n"
-        base_path = download_images(features, scenes, required_bands)
+        yield "Descargando bandas espectrales..."
+        base_path = yield from download_images(features, scenes, required_bands)
 
-        yield "Descarga completada con éxito."
+        yield "\nDescarga Finalizada."
+        return base_path
+    
+
+class ProcessingController:
+    """Controlador para Procesar las imágenes y el cálculo de los índices"""
+
+    def __init__(self, config):
+        self.config = config
+
+    def generate_mosaics(self):
+        """Genera los mosaicos y los recorta según el polígono"""
+        
+        yield "Iniciando proceso de creación de mosaicos y recortes...\n"
+        yield from generate_mosaics_and_clips()
+
+    def calculate_indices(self, indices):
+        """Calcula los índices y exporta los datos"""
+
+        yield "Calculando índices...\n"
+        yield from process_indices_from_cutouts_wrapper(indices)

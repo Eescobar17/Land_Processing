@@ -8,15 +8,15 @@ from folium.plugins import Draw
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QPushButton, QTextEdit,
                              QVBoxLayout, QHBoxLayout, QFrame, QLabel, QRadioButton,
                              QCheckBox, QLineEdit, QComboBox, QSlider, QGridLayout, QFileDialog,
-                             QGroupBox, QCalendarWidget, QDialog, QDialogButtonBox)
+                             QGroupBox, QCalendarWidget, QDialog, QDialogButtonBox, QSizePolicy, QMessageBox)
 from PyQt5.QtCore import Qt, QUrl, pyqtSignal
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QThread, pyqtSignal
+from pathlib import Path
 
 # Importaciones del proyecto - modificadas para estructura de módulos
-from src.controllers.landsat_controller import LandsatController
+from src.controllers.landsat_controller import LandsatController, ProcessingController
 
 class DatePickerDialog(QDialog):
     """Diálogo para seleccionar una fecha"""
@@ -160,6 +160,7 @@ class ProcessThread(QThread):
     Se configura un hilo aparte para evitar el bloqueo de la interfaz.
     """
     result_ready = pyqtSignal(object)  # Señal para devolver los resultados
+    error_occurred = pyqtSignal(str)   # Señal para comunicar errores
 
     def __init__(self, config):
         super().__init__()
@@ -179,24 +180,68 @@ class ProcessThread(QThread):
         
         except StopIteration as e:
             resultado = e.value  # Captura el valor de retorno
-
             features, scenes = resultado
+            indices = self.config["selected_indices"]
             print("Lista de diccionarios (scenes):", scenes)
 
-            indices = self.config["selected_indices"]
-            download_gen  = self.landsat_controller.download_data(features, scenes, indices)
-
             try:
+                download_gen = self.landsat_controller.download_data(features, scenes, indices)
+                
                 while True:
                     message = next(download_gen)  # Obtiene el siguiente mensaje
                     self.result_ready.emit(message)  # Emitir mensaje en tiempo real
                     self.msleep(100)  # Pequeña pausa para evitar saturar la interfaz
+            
             except StopIteration:
                 self.result_ready.emit((message, True))
-                print("Descarga finalizada.")
+                # print("Descarga finalizada.")
+            
+            except Exception as e:
+                self.error_occurred.emit(str(e))
 
         except Exception as e:
-            self.result_ready.emit(f"Error: {str(e)}")
+            self.error_occurred.emit(str(e))
+
+class SecondProcessThread(QThread):
+    result_ready = pyqtSignal(object)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.processing_controller = ProcessingController(config)
+
+    def run(self):
+        
+        try:
+            gen = self.processing_controller.generate_mosaics()  # Obtiene el generador
+            
+            while True:
+                message = next(gen)  # Obtiene el siguiente mensaje
+                self.result_ready.emit(message)  # Emitir mensaje en tiempo real
+                self.msleep(100)  # Pequeña pausa para evitar saturar la interfaz
+
+        # except StopIteration as e:
+
+        #     try:
+        #         indices = self.config["selected_indices"]
+        #         calculate_gen = self.processing_controller.calculate_indices(indices)
+                
+        #         while True:
+        #             message = next(calculate_gen)  # Obtiene el siguiente mensaje
+        #             self.result_ready.emit(message)  # Emitir mensaje en tiempo real
+        #             self.msleep(100)  # Pequeña pausa para evitar saturar la interfaz
+            
+        #     except StopIteration:
+        #         message =  "\nProcesamiento Finalizado."
+        #         self.result_ready.emit((message, True))
+            
+        #     except Exception as e:
+        #         self.error_occurred.emit(str(e))
+
+        except Exception as e:
+            print("****************** ERROR ***************************")
+            self.error_occurred.emit(str(e))
 
 class MapAppWindow(QMainWindow):
     """
@@ -220,6 +265,7 @@ class MapAppWindow(QMainWindow):
         self.imported_file_path = ""
         self.generated_file_path = ""
         self.min_area_value = 10
+        self.config = {}
 
         # Variable booleana para activar el panel de instrucciones del mapa
         self.show_instructions = False
@@ -301,9 +347,6 @@ class MapAppWindow(QMainWindow):
                                           "BSI - Índice de Suelo Desnudo\n"
                                           "LST - Temperatura de la Superficie Terrestre")
         
-
-
-
         # Tooltips para botones de acción
         process_button = self.findChild(QPushButton, name="process_button")  # Necesitamos añadir objectName al botón
         if process_button:
@@ -332,90 +375,71 @@ class MapAppWindow(QMainWindow):
         # ----------------------------
         # Primera fila: Import GeoJson
         # ----------------------------
-        
-        hbox1 = QHBoxLayout()
-        hbox1.setContentsMargins(0, 0, 0, 0)
-        hbox1.setSpacing(5)
-
         self.import_radio = QRadioButton("Importar archivo GeoJson/Shp")
         self.import_radio.setChecked(True)
         self.import_radio.toggled.connect(self.toggle_import_mode)
-        hbox1.addWidget(self.import_radio)
+        options_layout.addWidget(self.import_radio, 0, 0, 1, 4)
 
         self.search_entry = QLineEdit()
         self.search_entry.setCursor(QCursor(Qt.PointingHandCursor))
         self.search_entry.setStyleSheet("background-color: #F0F0F0;")
-        self.search_entry.setReadOnly(True)  # Hacer el campo de solo lectura
+        self.search_entry.setReadOnly(True)
         self.search_entry.mousePressEvent = lambda e: self.import_file()
-        self.search_entry.setFixedWidth(120)
-        hbox1.addWidget(self.search_entry)
+        self.search_entry.setMinimumWidth(100)
+        self.search_entry.setMaximumWidth(200)  # Evita que se expanda demasiado
+        options_layout.addWidget(self.search_entry, 0, 4)
 
         self.browse_button = QPushButton("...")
-        self.browse_button.setFixedWidth(30)
         self.browse_button.clicked.connect(self.import_file)
-        hbox1.addWidget(self.browse_button)
-        
-        hbox1.addStretch(1)
-        options_layout.addLayout(hbox1, 0, 0)
+        self.browse_button.setFixedWidth(50)
+        options_layout.addWidget(self.browse_button, 0, 5)
 
         # ------------------------------
         # Segunda fila: Generate Polygon
         # ------------------------------
-
-        hbox2 = QHBoxLayout()
-        hbox2.setContentsMargins(0, 0, 0, 0)
-        hbox2.setSpacing(5)
-
-        self.generate_radio = QRadioButton("Generar Polígono")
+        self.generate_radio = QRadioButton("Generar Polígono en el Mapa")
         self.generate_radio.toggled.connect(self.toggle_generate_mode)
-        hbox2.addWidget(self.generate_radio)
+        options_layout.addWidget(self.generate_radio, 1, 0, 1, 4)
 
         self.generator_textbox = QLineEdit()
-        self.generator_textbox.setFixedWidth(120)
         self.generator_textbox.setReadOnly(True)
         self.generator_textbox.setPlaceholderText("GeoJSON...")
         self.generator_textbox.setStyleSheet("background-color: #F0F0F0;")
-        hbox2.addWidget(self.generator_textbox)
-
-        guide_button = QPushButton("GUÍA")
-        guide_button.setFixedWidth(100)
-        guide_button.clicked.connect(self.show_guide)
-        hbox2.addWidget(guide_button)
-
-        hbox2.addStretch(1)
-        options_layout.addLayout(hbox2, 1, 0)
+        options_layout.addWidget(self.generator_textbox, 1, 4, 1, 2)
 
         # ------------------------
         # Tercera fila: Path y Row
         # ------------------------
-
-        path_row_layout = QHBoxLayout()
-        path_row_layout.setContentsMargins(0, 0, 0, 0)
-        path_row_layout.setSpacing(5)
-
         self.path_row_radio = QRadioButton("Path:")
         self.path_row_radio.toggled.connect(self.toggle_path_row)
-        path_row_layout.addWidget(self.path_row_radio)
+        options_layout.addWidget(self.path_row_radio, 2, 0, 1, 1)
 
         self.path_entry = QLineEdit()
-        self.path_entry.setFixedWidth(70)
         self.path_entry.setEnabled(False)
-        path_row_layout.addWidget(self.path_entry)
+        self.path_entry.setMinimumWidth(25)
+        self.path_entry.setMaximumWidth(50)  # Evita que se expanda demasiado
+        options_layout.addWidget(self.path_entry, 2, 1, 1, 1)
 
-        path_row_layout.addWidget(QLabel("Row:"))
-
-        self.row_entry = QLineEdit()
-        self.row_entry.setFixedWidth(70)
-        self.row_entry.setEnabled(False)
-        path_row_layout.addWidget(self.row_entry)
-
-        path_row_layout.addStretch(1)
-        options_layout.addLayout(path_row_layout, 2, 0)
+        options_layout.addWidget(QLabel("Row:"), 2, 2, 1, 1)
         
-        # ----------------------------
+        self.row_entry = QLineEdit()
+        self.row_entry.setEnabled(False)
+        self.row_entry.setMinimumWidth(25)
+        self.row_entry.setMaximumWidth(50)  # Evita que se expanda demasiado
+        options_layout.addWidget(self.row_entry, 2, 3)
 
+        # ----------------------------
+        # Botón de guía (ocupa toda la altura)
+        # ----------------------------
+        guide_button = QPushButton("GUÍA")
+        guide_button.setFixedWidth(100)
+        guide_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        guide_button.clicked.connect(self.show_guide)
+        options_layout.addWidget(guide_button, 0, 6, 3, 1)
+        
         # Añadir panel de opciones al layout izquierdo
         self.control_panel_layout.addWidget(options_panel)
+
         
         # Panel de parámetros
         params_frame = QGroupBox("Parámetros")
@@ -585,18 +609,40 @@ class MapAppWindow(QMainWindow):
         self.save_button.setEnabled(False)  # Deshabilitado hasta que se extraigan coordenadas
         results_layout.addWidget(self.save_button)
         
-        # Process buttons
+        # Contenedor para los botones
         process_frame = QWidget()
-        process_layout = QHBoxLayout(process_frame)
-        
+        process_layout = QHBoxLayout()
+
+        # Añadir espacio antes de los botones
+        process_layout.addStretch()
+
+        # Botón 1: PROCESAR DATOS
         self.process_button = QPushButton("PROCESAR DATOS")
-        self.process_button.setObjectName("process_button")  # Añadir objectName para poder encontrarlo luego
-        self.process_button.setFixedSize(150, 50)
+        self.process_button.setObjectName("process_button")
+        self.process_button.setFixedSize(170, 50)
         self.process_button.setStyleSheet("font-weight: bold; font-size: 14px;")
         self.process_button.clicked.connect(self.process_data)
         process_layout.addWidget(self.process_button)
+
+        # Añadir espacio entre los botones
         process_layout.addStretch()
-        
+
+        # Botón 2: CALCULAR INDICES
+        self.calculate_button = QPushButton("CALCULAR INDICES")
+        self.calculate_button.setObjectName("calculate_indices")
+        self.calculate_button.setFixedSize(170, 50)
+        self.calculate_button.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.calculate_button.clicked.connect(self.calculate_indices)
+        self.calculate_button.setEnabled(True)
+        process_layout.addWidget(self.calculate_button)
+
+        # Añadir espacio después de los botones
+        process_layout.addStretch()
+
+        # Asignar el layout al contenedor
+        process_frame.setLayout(process_layout)
+
+        # Agregar el contenedor al layout principal
         results_layout.addWidget(process_frame)
         
         # Añadir componentes al panel izquierdo
@@ -908,6 +954,9 @@ class MapAppWindow(QMainWindow):
         """
         Guarda las coordenadas extraídas en archivos JSON y GeoJSON.
         """
+        self.extract_button.setEnabled(True)
+        self.save_button.setEnabled(False)
+
         if not self.polygons:
             self.results_text.append("No hay coordenadas para guardar.")
             return
@@ -919,32 +968,36 @@ class MapAppWindow(QMainWindow):
         # Exportar archivo JSON
         # ---------------------
 
-        save_dir = os.path.normpath(os.path.join(base_dir, "data/exports/"))
+        save_dir = Path(base_dir) / "data/exports"
 
         # Crear la carpeta si no existe
-        os.makedirs(save_dir, exist_ok=True)
+        save_dir.mkdir(parents=True, exist_ok=True)
 
         # Guardar en formato JSON personalizado
-        output_file_json = f"{save_dir}coordenadas_poligono.json"
+        output_file_json = save_dir / "coordenadas_poligono.json"
+
         with open(output_file_json, 'w') as f:
-            json.dump({"polygons": self.polygons}, f, indent=4)
+            json.dump({"polygons": self.polygons[0]}, f, indent=4)
 
 
         # ---------------------
         # Exportar archivo GEOJSON
         # ---------------------
 
-        save_dir = os.path.normpath(os.path.join(base_dir, "data/temp/source/"))
+        save_dir = Path(base_dir) / "data/temp/source"
 
         # Limpiar la carpeta eliminando todo su contenido
-        if os.path.exists(save_dir):
+        if save_dir.exists():
             shutil.rmtree(save_dir)  # Elimina la carpeta y su contenido
 
         # Crear la carpeta si no existe
-        os.makedirs(save_dir, exist_ok=True)
+        save_dir.mkdir(parents=True, exist_ok=True)
 
         # Guardar en formato GeoJSON estándar
-        output_file_geojson = f"{save_dir}source_file.geojson"
+        output_file_geojson = save_dir / "source_file.geojson"
+
+        # Actualizar la variable
+        self.imported_file_path = output_file_geojson
 
         # Obtener la ruta absoluta del archivo GeoJSON (para facilitar su uso en otros scripts)
         abs_path_geojson = os.path.abspath(output_file_geojson)
@@ -1163,26 +1216,55 @@ class MapAppWindow(QMainWindow):
         # Recargar el mapa en la interfaz
         self.web_view.load(QUrl.fromLocalFile(self.html_file))
 
+    def generate_error(self, title, message):
+        """Muestra una ventana de error con PyQt"""
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Icon.Critical)
+        msg.setWindowTitle(title)
+        msg.setText(message)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
+
     def process_data(self):
         """Procesa los datos basados en la configuración actual"""
         
+        self.calculate_button.setEnabled(False)
+
+        # Se limpian los directorios
+        script_dir = Path(__file__).parent
+        data_paths = [
+            script_dir.parent.parent / "data" / "temp" / "processed",
+            script_dir.parent.parent / "data" / "temp" / "downloads",
+            script_dir.parent.parent / "data" / "exports"
+        ]
+
+        for path in data_paths:
+            path = Path(path)  # Asegurar que es un objeto Path
+            if path.exists():
+                shutil.rmtree(path, onerror=lambda func, p, exc: Path(p).chmod(0o777) or func(p))  # Manejo de permisos
+            path.mkdir(parents=True, exist_ok=True)  # Crear el directorio limpio
+
+        print("Directorios preparados correctamente.")
+
         def validar_fecha(fecha):
             """Valida que la fecha tenga el formato correcto (YYYY-MM-DD)"""
             try:
-                if fecha and fecha != "dd/mm/yyyy":
-                    return datetime.strptime(fecha, "%d/%m/%Y").strftime("%Y-%m-%d")
-            except ValueError:
-                pass
-            return ""  # Retorna vacío si es inválida
+                if not fecha or fecha == "dd/mm/yyyy":
+                    return None  # Retorna None para indicar que la validación falló
 
-        # Obtener valores de las entradas con validación
+                return datetime.strptime(fecha, "%d/%m/%Y").strftime("%Y-%m-%d")
+
+            except ValueError:
+                self.generate_error("Error Inesperado", "Verifique si la fecha ingresada es correcta.")
+                return None  # Retorna None si el formato es inválido
+
         start_date = validar_fecha(self.start_date_entry.text())
         end_date = validar_fecha(self.end_date_entry.text())
         diff_start_date = validar_fecha(self.diff_start_date_entry.text())
         diff_end_date = validar_fecha(self.diff_end_date_entry.text())
 
         # Obtener valores actualizados
-        config = {
+        self.config = {
             "file_path": "../../data/temp/source/source_file.*",
             "import_mode": getattr(self, "import_mode", False),  
             "generate_mode": getattr(self, "generate_mode", False),
@@ -1202,53 +1284,100 @@ class MapAppWindow(QMainWindow):
             "limit": 100
         }
 
-        # Guardar configuración en JSON
-        config_file = "process_config.json"
-        try:
-            with open(config_file, 'w') as f:
-                json.dump(config, f, indent=4)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo guardar el archivo de configuración: {str(e)}")
-            return  # Detener el proceso si hay error
+        if (self.config["import_mode"] or self.config["generate_mode"]) and not self.config["imported_file"]:
+            self.generate_error("Error", "Si se usa el modo Importar/Generar se debe de cargar/generar un archivo.")
+            return
 
+        if self.config["path_row_mode"] and (not self.path_entry.text().strip() or not self.row_entry.text().strip()):
+            self.generate_error("Error", "Los campos Path y Row no deben de estar vacíos.")
+            return
+
+        if None in (self.config["start_date"], self.config["end_date"]):
+            self.generate_error("Error", "Las fechas deben tener el formato DD/MM/YYYY.")
+            return
+
+        if self.config["diff_date_enabled"] and None in (self.config["diff_start_date"], self.config["diff_end_date"]):
+            self.generate_error("Error", "Las fechas deben tener el formato DD/MM/YYYY.")
+            return
+
+        if not self.config["selected_indices"]:
+            self.generate_error("Error", "Se debe de seleccionar al menos un índice.")
+            return
+
+        self.process_button.setEnabled(False) # Se desactiva para evitar ejecuciones paralelas
+        self.results_text.clear() # Limpiar panel de resultados
         # ------------------------------
         # Mostrar resumen de la configuración
         # ------------------------------
         resumen = [
             "=== Procesando datos ===",
-            f"Configuración guardada en {config_file}",
             "\nResumen de configuración:",
-            f"- Modo: {'Importar archivo' if config['import_mode'] else 'Generar polígono' if config['generate_mode'] else 'Seleccionar Path/Row'}",
-            f"- Fechas: {config['start_date']} a {config['end_date']}",
-            f"- Fechas comparativas: {config['diff_start_date']} a {config['diff_end_date']}" if config['diff_date_enabled'] else "- No hay comparación de fechas",
-            f"- Cobertura de nubes: {config['cloud_cover']}%",
-            f"- Plataformas: {', '.join(config['platform'])}",
-            f"- Índices seleccionados: {', '.join(config['selected_indices'])}" if config['selected_indices'] else "- No se seleccionaron índices de reflectancia",
-            f"- Archivo importado: {config['imported_file']}" if config['import_mode'] and config['imported_file'] else "- No se ha importado ningún archivo",
+            f"- Modo: {'Importar archivo' if self.config['import_mode'] else 'Generar polígono' if self.config['generate_mode'] else 'Seleccionar Path/Row'}",
+            f"- Fechas: {self.config['start_date']} a {self.config['end_date']}",
+            f"- Fechas comparativas: {self.config['diff_start_date']} a {self.config['diff_end_date']}" if self.config['diff_date_enabled'] else "- No hay comparación de fechas",
+            f"- Cobertura de nubes: {self.config['cloud_cover']}%",
+            f"- Plataformas: {', '.join(self.config['platform'])}",
+            f"- Índices seleccionados: {', '.join(self.config['selected_indices'])}" if self.config['selected_indices'] else "- No se seleccionaron índices de reflectancia",
+            f"- Archivo importado: {self.config['imported_file']}" if self.config['import_mode'] and self.config['imported_file'] else "- No se ha importado ningún archivo",
             "\n=== Iniciando procesamiento de datos ==="
         ]
 
         self.results_text.clear()
         self.results_text.append("\n".join(resumen))
 
-        self.process_button.setEnabled(False) # Se desactiva para evitar ejecuciones paralelas
-
         # ------------------------------------------
         # Procesar datos mediante hilo independiente
         # ------------------------------------------
 
-        self.thread = ProcessThread(config)
-        self.thread.result_ready.connect(self.handle_result)
-        self.thread.start()
+        self.first_thread = ProcessThread(self.config)
+        self.first_thread.result_ready.connect(self.handle_result)
+        self.first_thread.error_occurred.connect(self.handle_error)
+        self.first_thread.start()
 
     def handle_result(self, result):
         """Muestra un mensaje cuando finaliza el proceso y habilita el botón si es necesario"""
         
         if isinstance(result, tuple) and len(result) == 2:
             message, enable_button = result  # Desempaquetar la tupla
-            self.results_text.append(message)  # Agregar mensaje a la interfaz
+            # self.results_text.append(message)  # Agregar mensaje a la interfaz
 
             if enable_button:
-                self.process_button.setEnabled(True)  # Habilitar el botón si el proceso terminó
+                self.process_button.setEnabled(True) # Habilitar el botón si el proceso terminó
+                self.calculate_button.setEnabled(True)
         else:
             self.results_text.append(str(result))  # Si no es una tupla, solo mostrar el mensaje
+
+    def handle_error(self, error_message):
+        print(f"Se produjo un error en el hilo: {error_message}")
+        self.process_button.setEnabled(True)
+        self.generate_error("Error", error_message)
+
+    def calculate_indices(self):
+        from ..landsat import generate_mosaics_and_clips
+
+        generate_mosaics_and_clips()
+
+        # ------------------------------------------
+        # Procesar datos mediante hilo independiente
+        # ------------------------------------------
+        # config = {
+        #     "selected_indices": ["NDVI"]
+        # }
+
+        # self.second_thread = SecondProcessThread(config)
+        # self.second_thread.result_ready.connect(self.handle_second_result)
+        # self.second_thread.error_occurred.connect(self.handle_second_error)
+        # self.second_thread.start()
+
+    def handle_second_result(self, result):
+        """Muestra un mensaje cuando finaliza el proceso y habilita el botón si es necesario"""
+        
+        if isinstance(result, tuple) and len(result) == 2:
+            message, _ = result  # Desempaquetar la tupla
+            self.results_text.append(message)  # Agregar mensaje a la interfaz
+        else:
+            self.results_text.append(str(result))  # Si no es una tupla, solo mostrar el mensaje
+
+    def handle_second_error(self, error_message):
+        print(f"Se produjo un error en el hilo: {error_message}")
+        self.generate_error("Error", error_message)

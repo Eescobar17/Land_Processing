@@ -288,7 +288,7 @@ def analyze_coverage(relative_path, features, min_area, window_days=120, delete_
     for i, feature in enumerate(features):
         footprint = get_footprint_from_feature(feature)
         if not footprint:
-            continue
+            raise Exception(f"No se pudo encontrar la huella de la escena: {feature.get('id', f'Escena {i+1}')}")
         
         # Obtener información de la escena
         props = feature.get('properties', {})
@@ -330,13 +330,15 @@ def analyze_coverage(relative_path, features, min_area, window_days=120, delete_
     scenes_df = pd.DataFrame(all_scenes)
     
     if scenes_df.empty:
-        print("No se encontraron escenas con intersección significativa con el polígono.")
-        return {
-            'total_coverage_percent': 0,
-            'coverage_by_scene': pd.DataFrame(),
-            'scenes_needed': [],
-            'uncovered_percent': 100
-        }
+        msg = "No se encontraron escenas con intersección significativa con el polígono."
+        print(msg)
+        raise Exception(msg)
+        # return {
+        #     'total_coverage_percent': 0,
+        #     'coverage_by_scene': pd.DataFrame(),
+        #     'scenes_needed': [],
+        #     'uncovered_percent': 100
+        # }
 
     # Ordenar por menor cloud_cover
     scenes_df = scenes_df.sort_values(by=["cloud_cover"])
@@ -424,26 +426,25 @@ def process_metadata(features, min_area=0):
     )
 
     if not files:
-        raise FileNotFoundError(f"No se encontró ningún archivo en: {data_path}")
+        raise Exception(f"No se encontró ningún archivo en: {data_path}")
     
     # Se selecciona el primer archivo
     relative_path = files[0]
 
+    if not features:
+        msg = """No se encontraron imágenes con los criterios especificados.
+        \nSugerencias:
+        1. Amplía el rango de fechas.
+        2. Aumenta el porcentaje de cobertura de nubes permitido.
+        3. Verifica que el polígono está en un área con cobertura Landsat.
+        """
+        print(msg)
+        yield "No se encontraron imágenes con los criterios especificados."
+        raise Exception(msg)
+
     try:
-        if not features:
-            msg = """No se encontraron imágenes con los criterios especificados.
-            \nSugerencias:
-            1. Amplía el rango de fechas.
-            2. Aumenta el porcentaje de cobertura de nubes permitido.
-            3. Verifica que el polígono está en un área con cobertura Landsat.
-            """
-            print(msg)
-            yield msg
-            return scenes
-        
         msg = f"Se encontraron {len(features)} imágenes que cumplen con los criterios."
         print(msg)
-        # message += msg
         yield msg
         
         # 6. Mostrar información de las imágenes encontradas
@@ -470,7 +471,6 @@ def process_metadata(features, min_area=0):
         if len(features) > 0:
             msg = "\nAnalizando cobertura del polígono..."
             print(msg)
-            # message += msg
             yield msg
             
             # Analizar la cobertura
@@ -478,7 +478,6 @@ def process_metadata(features, min_area=0):
 
             msg = f"""\nCobertura total: {coverage_info['total_coverage_percent']:.2f}%\nSe necesitan {len(coverage_info['scenes_needed'])} escenas para cubrir el polígono"""
             print(msg)
-            # message += msg
             yield msg
 
             # Obtener las escenas necesarias para la cobertura óptima
@@ -486,20 +485,22 @@ def process_metadata(features, min_area=0):
             coverage_percent = coverage_info['total_coverage_percent']
 
             # Generar visualización de cobertura
-            coverage_map = visualize_coverage(relative_path, features, scenes_needed, coverage_percent)
+            try:
+                coverage_map = visualize_coverage(relative_path, features, scenes_needed, coverage_percent)
+                msg = f"\nMapa de Cobertura generado: {coverage_map}"
+            except Exception as e:
+                msg = "No se pudo generar un Mapa de Cobertura"
 
-            msg = f"\nMapa de cobertura generado: {coverage_map}"
             print(msg)
-            # message += msg
             yield msg
 
             scenes = scenes_needed
 
-        yield "Proceso Finalizado"
+        yield "Proceso de captura de metadata finalizado"
         return scenes
 
     except Exception as e:
         msg = f"Error durante el procesamiento: {str(e)}"
         print(msg)
         traceback.print_exc()
-        yield msg
+        raise

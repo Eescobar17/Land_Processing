@@ -58,7 +58,7 @@ def generate_landsat_query(
         )
 
         if not files:
-            raise FileNotFoundError(f"No se encontró ningún archivo en: {data_path}")
+            raise Exception(f"No se encontró ningún archivo en: {data_path}")
 
         # Cargar el archivo más reciente
         gdf = gpd.read_file(files[0])
@@ -96,6 +96,7 @@ def fetch_stac_server(query):
     url = f"https://landsatlook.usgs.gov/stac-server/search"
     data = requests.post(url, headers=headers, json=query).json()
     error = data.get("message", "")
+    
     if error:
         raise Exception(f"STAC-Server failed and returned: {error}")
 

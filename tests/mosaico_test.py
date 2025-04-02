@@ -181,6 +181,42 @@ def build_mosaic_per_band(band_files, output_path, band_name, temp_dir=None):
         print(f"Error al crear VRT: {str(e)}")
         subprocess.run(cmd, shell=True, check=True) # Ejecutar como proceso externo si falla la API
 
+    # print("Tipos de archivos en sorted_files:")
+    # for archivo in sorted_files:
+    #     print(type(archivo), archivo)
+
+    # print("Tipo de vrt_path:", type(vrt_path), vrt_path)
+
+    # raster_files = [os.path.normpath(archivo[0]) if isinstance(archivo, tuple) else os.path.normpath(archivo) for archivo in sorted_files]
+    
+    # for archivo in raster_files:
+    #     if not os.path.exists(archivo):
+    #         print(f"⚠️ ERROR: El archivo no existe: {archivo}")
+
+    # print("******* ********* *********")
+
+    # try:
+    #     print("Checkpoint 1: Intentando ejecutar gdal.BuildVRT...")
+        
+    #     gdal.BuildVRT(
+    #         vrt_path, 
+    #         raster_files,  
+    #         options=gdal.BuildVRTOptions(
+    #             resolution='highest',
+    #             separate=False,
+    #             allowProjectionDifference=True
+    #         )
+    #     )
+        
+    #     print("Checkpoint 2: Ejecución de gdal.BuildVRT exitosa.")
+
+    # except Exception as e:
+    #     print("⚠️ ERROR en gdal.BuildVRT:", str(e))
+    #     import traceback
+    #     traceback.print_exc()
+
+    print("******** PASO *************")
+
     # Convertir el VRT al mosaico GeoTIFF final
     # -co COMPRESS=DEFLATE: Usar compresión DEFLATE
     # -co PREDICTOR=2: Usar predictor para mejorar compresión
@@ -301,7 +337,7 @@ def generate_mosaics_and_clips(temp_dir=None):
     """
 
     script_dir = Path(__file__).parent
-    data_path = script_dir.parent.parent / "data" / "temp" / "source"
+    data_path = script_dir.parent / "data" / "temp" / "source"
 
     # Buscar archivos con extensión .geojson y .shp
     files = sorted(
@@ -353,46 +389,55 @@ def generate_mosaics_and_clips(temp_dir=None):
             print(f"Error al crear mosaico para banda {band}: {str(e)}")
             print(traceback.format_exc())
 
-    if not processed_mosaics:
-        raise Exception("No se pudo crear ningún mosaico.")
+    # if not processed_mosaics:
+    #     raise Exception("No se pudo crear ningún mosaico.")
 
-    created_clips = {}
-    clips_path = script_dir.parent.parent / "data" / "temp" / "processed" / "clip"
+    # created_clips = {}
+    # clips_path = script_dir.parent.parent / "data" / "temp" / "processed" / "clip"
 
-    yield "Mosaico generado. Realizando corte...\n"
-    for band, mosaic_path in processed_mosaics.items():
-        try:
-            print(f"\nRecortando mosaico para banda {band}...")
-            clip_path = extract_mosaic_by_polygon(mosaic_path, polygon_path, clips_path)
+    # yield "Mosaico generado. Realizando corte...\n"
+    # for band, mosaic_path in processed_mosaics.items():
+    #     try:
+    #         print(f"\nRecortando mosaico para banda {band}...")
+    #         clip_path = extract_mosaic_by_polygon(mosaic_path, polygon_path, clips_path)
 
-            if clip_path is not None:
-                created_clips[band] = clip_path
-                print(f"Recorte creado exitosamente: {clip_path}")
-            else:
-                raise Exception(f"No se pudo crear el recorte para la banda {band}")
-        except Exception as e:
-            print(f"Error al recortar mosaico para banda {band}: {str(e)}")
-            print(traceback.format_exc())
+    #         if clip_path is not None:
+    #             created_clips[band] = clip_path
+    #             print(f"Recorte creado exitosamente: {clip_path}")
+    #         else:
+    #             raise Exception(f"No se pudo crear el recorte para la banda {band}")
+    #     except Exception as e:
+    #         print(f"Error al recortar mosaico para banda {band}: {str(e)}")
+    #         print(traceback.format_exc())
 
-    results = {
-        "mosaicos": processed_mosaics,
-        "recortes": created_clips
-    }
+    # results = {
+    #     "mosaicos": processed_mosaics,
+    #     "recortes": created_clips
+    # }
 
-    output_clips = script_dir.parent.parent / "data" / "exports"
-    os.makedirs(output_clips, exist_ok=True)
+    # output_clips = script_dir.parent.parent / "data" / "exports"
+    # os.makedirs(output_clips, exist_ok=True)
 
-    log_path = os.path.join(output_clips, "registro_procesamiento.json")
+    # log_path = os.path.join(output_clips, "registro_procesamiento.json")
 
-    try:
-        with open(log_path, 'w') as f:
-            json.dump(results, f, indent=4)
-    except Exception as e:
-        print(f"Error al guardar el registro de procesamiento: {str(e)}")
-        print(traceback.format_exc())
+    # try:
+    #     with open(log_path, 'w') as f:
+    #         json.dump(results, f, indent=4)
+    # except Exception as e:
+    #     print(f"Error al guardar el registro de procesamiento: {str(e)}")
+    #     print(traceback.format_exc())
 
-    msg = f"\nProcesamiento completado. Se generaron {len(processed_mosaics)} mosaicos y {len(created_clips)} recortes.\nRegistro guardado en {log_path}"
-    print(msg)
-    yield msg
+    # msg = f"\nProcesamiento completado. Se generaron {len(processed_mosaics)} mosaicos y {len(created_clips)} recortes.\nRegistro guardado en {log_path}"
+    # print(msg)
+    # yield msg
 
-    return results
+    # return results
+
+
+
+
+# gen = generate_mosaics_and_clips()  # Obtiene el generador
+
+# while True:
+#     message = next(gen)  # Obtiene el siguiente mensaje
+#     print(message)

@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from .config import USGS_USERNAME, USGS_PASSWORD
 from pathlib import Path
+import traceback
 
 LOGIN_URL = "https://ers.cr.usgs.gov/login"
 
@@ -54,6 +55,8 @@ def determine_required_bands(selected_indices):
     if required_bands:
         print(f"\nÍndices seleccionados: {', '.join(selected_indices)}")
         print(f"Bandas requeridas: {', '.join(required_bands)}")
+    else:
+        raise Exception("No se encontraron índices seleccionados.")
     
     return list(required_bands)
 
@@ -72,12 +75,16 @@ def download_selective_bands(feature, required_bands, download_path, session):
     
     # Verificar si tiene assets
     if 'assets' not in feature:
-        print(f"Error: La imagen {feature.get('id', 'desconocida')} no tiene la clave 'assets'")
-        return None
+        msg = f"Error: La imagen {feature.get('id', 'desconocida')} no tiene la clave 'assets'"
+        print(msg)
+        raise Exception(msg)
     
     # Obtener ID de la escena
     scene_id = feature.get('id', 'unknown')
-    print(f"Descargando bandas {', '.join(required_bands)} para la escena {scene_id}")
+    # msg = f"Descargando bandas {', '.join(required_bands)} para la escena {scene_id}"
+    msg = f"Descargando bandas {', '.join(required_bands)}"
+    print(msg)
+    yield msg
     
     # Mostrar los assets disponibles para diagnóstico
     print(f"Assets disponibles: {', '.join(feature['assets'].keys())}")
@@ -92,6 +99,7 @@ def download_selective_bands(feature, required_bands, download_path, session):
     # Intentar diferentes estrategias para encontrar y descargar cada banda
     for band in required_bands:
         band_found = False
+        download_url = None
         
         # Lista de posibles variantes para cada banda
         band_variants = [
@@ -152,13 +160,16 @@ def download_selective_bands(feature, required_bands, download_path, session):
         
         # Si no se pudo encontrar la banda, registrar el error
         if not band_found:
-            print(f"Error: No se pudo encontrar la banda {band} en los assets disponibles")
+            msg = f"Error: No se pudo encontrar la banda {band} en los assets disponibles"
+            print(msg)
             all_successful = False
-            continue
+            raise Exception(msg)
         
         # Crear el nombre del archivo local
         file_name = os.path.join(download_path, f"{scene_id.split('_SR')[0]}_{band}.TIF")
-        print(f"Descargando: {os.path.basename(file_name)}")
+        msg = f"Descargando: {os.path.basename(file_name)}"
+        print(msg)
+        yield msg
 
         try:
             # Descargar la imagen con autenticación
@@ -175,51 +186,57 @@ def download_selective_bands(feature, required_bands, download_path, session):
                         if total_size > 0 and downloaded % (total_size // 5) < 8192:
                             percent = (downloaded / total_size) * 100
                             print(f"Progreso: {percent:.1f}%")
+                            yield f"Progreso: {percent:.1f}%"
             
             print(f"Descargado: {file_name}")
             downloaded_bands.append(band)
+        
         except Exception as e:
             print(f"Error al descargar la banda {band}: {str(e)}")
             all_successful = False
+            raise
 
-        # ------------------
-        # Descargar Metadata
-        # ------------------
+    # ------------------
+    # Descargar Metadata
+    # ------------------
 
-        # Crear el nombre del archivo local
-        file_name = os.path.join(download_path, f"{scene_id.split('_SR')[0]}_MTL.json")
-        download_url = feature['assets']['MTL.json']['href']
-        print(f"Descargando: {os.path.basename(file_name)}")
+    # Crear el nombre del archivo local
+    file_name = os.path.join(download_path, f"{scene_id.split('_SR')[0]}_MTL.json")
+    download_url = feature['assets']['MTL.json']['href']
+    print(f"Descargando: {os.path.basename(file_name)}")
 
-        try:
-            # Descargar la imagen con autenticación
-            with session.get(download_url, stream=True) as response:
-                response.raise_for_status()
-                total_size = int(response.headers.get('content-length', 0))
-                
-                with open(file_name, 'wb') as file:
-                    downloaded = 0
-                    for chunk in response.iter_content(chunk_size=8192):
-                        file.write(chunk)
-                        downloaded += len(chunk)
-                        # Mostrar progreso cada 20%
-                        if total_size > 0 and downloaded % (total_size // 5) < 8192:
-                            percent = (downloaded / total_size) * 100
-                            print(f"Progreso: {percent:.1f}%")
+    try:
+        # Descargar la imagen con autenticación
+        with session.get(download_url, stream=True) as response:
+            response.raise_for_status()
+            total_size = int(response.headers.get('content-length', 0))
             
-            print(f"Descargado: {file_name}")
-        except Exception as e:
-            print(f"Error al descargar la metadata")
-            all_successful = False
+            with open(file_name, 'wb') as file:
+                downloaded = 0
+                for chunk in response.iter_content(chunk_size=8192):
+                    file.write(chunk)
+                    downloaded += len(chunk)
+                    # Mostrar progreso cada 20%
+                    if total_size > 0 and downloaded % (total_size // 5) < 8192:
+                        percent = (downloaded / total_size) * 100
+                        print(f"Progreso: {percent:.1f}%")
+        
+        print(f"Descargado: {file_name}")
+    except Exception as e:
+        print(f"Error al descargar la metadata")
+        all_successful = False
+        raise
     
     # Verificar que se descargaron todas las bandas requeridas
     if all_successful:
         print(f"Se descargaron todas las bandas requeridas: {', '.join(downloaded_bands)}")
-        return base_path
+        print(f"Retornando base_path: {base_path}")  # Debug
+        yield (base_path, True)
     elif downloaded_bands:
         print(f"Advertencia: Solo se descargaron algunas bandas: {', '.join(downloaded_bands)}")
         print(f"Faltan las bandas: {', '.join(set(required_bands) - set(downloaded_bands))}")
-        return base_path  # Devolver la ruta base para las bandas que sí se pudieron descargar
+        print(f"Retornando base_path: {base_path}")  # Debug
+        yield (base_path, True)
     else:
         print("Error: No se pudo descargar ninguna banda")
         return None
@@ -229,42 +246,55 @@ def download_images(features, scenes_needed, required_bands):
 
     # Ruta basada en la ubicación del script
     script_dir = Path(__file__).parent  # Carpeta donde está el script
+    
     download_path = script_dir.parent.parent / "data" / "temp" / "downloads"  # Ruta a la carpeta con los archivos
     os.makedirs(download_path, exist_ok=True)
 
     downloaded_scenes = []
 
     # Iniciar sesión en USGS
-    session = login_usgs()
-    
-    for i, scene_info in enumerate(scenes_needed):
-        # Buscar la característica correspondiente en la lista original
-        scene_id = scene_info['id']
-        
-        target_feature = None
-        for feature in features:
-            if feature.get('id') == scene_id:
-                target_feature = feature
-                break
+    try:
+        session = login_usgs()
+    except Exception as e:
+        raise Exception("Fallo al iniciar sesión en USGS.") from e
 
-        if target_feature:
-            print(f"\nDescargando escena {i+1}/{len(scenes_needed)}: {scene_id}")
+    for i, scene_info in enumerate(scenes_needed):
+        try:
+            scene_id = scene_info['id']
             
-            # Crear un subdirectorio específico para esta escena
-            scene_dir = os.path.join(download_path, f"scene_{scene_info['path']}_{scene_info['row']}")
-            os.makedirs(scene_dir, exist_ok=True)
-            
-            # Descargar todas las bandas requeridas
-            base_path = download_selective_bands(target_feature, required_bands, scene_dir, session)
-            
-            if base_path:
-                print(f"Escena {scene_id} descargada correctamente con todas las bandas requeridas")
-                downloaded_scenes.append({
-                    'scene_dir': scene_dir,
-                    'base_path': base_path,
-                    'scene_id': scene_id
-                })
+            target_feature = next((f for f in features if f.get('id') == scene_id), None)
+
+            if target_feature:
+                msg = f"\nDescargando escena {i+1}/{len(scenes_needed)}: {scene_id}"
+                print(msg)
+                yield msg
+
+                scene_dir = os.path.join(download_path, f"scene_{scene_info['path']}_{scene_info['row']}")
+                os.makedirs(scene_dir, exist_ok=True)
+                
+                gen = download_selective_bands(target_feature, required_bands, scene_dir, session)
+                base_path = None
+
+                for message in gen:
+                    if isinstance(message, tuple) and len(message) == 2:
+                        print(f"Se retorna la tupla: {message}")  # Debug
+                        base_path = message[0]
+                        break
+                    else:
+                        yield message
+
+                if base_path:
+                    print(f"Escena {scene_id} descargada correctamente con todas las bandas requeridas")
+                    downloaded_scenes.append({
+                        'scene_dir': scene_dir,
+                        'base_path': base_path,
+                        'scene_id': scene_id
+                    })
+                else:
+                    print(f"Error al descargar la escena {scene_id}")
             else:
-                print(f"Error al descargar la escena {scene_id}")
-        else:
-            print(f"No se encontró la característica correspondiente a {scene_id}")
+                print(f"No se encontró la característica correspondiente a {scene_id}")
+
+        except Exception as e:
+            print(f"Error en la descarga de la escena {scene_id}: {e}")
+            traceback.print_exc()  # Para ver detalles del error sin interrumpir el flujo
