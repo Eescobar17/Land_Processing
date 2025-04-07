@@ -65,16 +65,7 @@ def determine_required_bands(selected_indices):
 def download_selective_bands(feature, required_bands, download_path, session):
     """
     Descarga solo las bandas específicas de una imagen Landsat.
-    
-    Args:
-        feature: Característica (feature) de Landsat
-        required_bands: Lista de bandas requeridas (e.g., ["B2", "B4", "B5"])
-        download_path: Ruta donde guardar las imágenes descargadas
-        session: Sesión iniciada en USGS
-    Returns:
-        str: Ruta base para los archivos descargados, o None si falló
     """
-    
     # Verificar si tiene assets
     if 'assets' not in feature:
         msg = f"Error: La imagen {feature.get('id', 'desconocida')} no tiene la clave 'assets'"
@@ -245,15 +236,11 @@ def download_selective_bands(feature, required_bands, download_path, session):
 
 def download_images(features, scenes_needed, required_bands):
     """ Descargar cada escena necesaria con todas las bandas requeridas """
-
     # Ruta basada en la ubicación del script
     script_dir = Path(__file__).parent  # Carpeta donde está el script
-    
     download_path = script_dir.parent.parent / "data" / "temp" / "downloads"  # Ruta a la carpeta con los archivos
     os.makedirs(download_path, exist_ok=True)
-
     downloaded_scenes = []
-
     # Iniciar sesión en USGS
     try:
         session = login_usgs()

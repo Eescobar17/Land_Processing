@@ -175,12 +175,6 @@ class ProcessingController:
     def calculate_indices(self, indices):
         """
         Calcula los índices espectrales y exporta los resultados.
-        
-        Args:
-            indices: Lista de índices a calcular
-        
-        Yields:
-            Mensajes sobre el progreso del cálculo
         """
         try:
             if not indices:

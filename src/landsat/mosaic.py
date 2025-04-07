@@ -14,22 +14,11 @@ gdal.UseExceptions()
 def extract_mosaic_by_polygon(mosaic_path, polygon_path, output_path):
     """
     Recorta un mosaico de banda utilizando un polígono con manejo de diferentes CRS.
-    
-    Args:
-        mosaic_path (str): Ruta al archivo mosaico
-        polygon_path (str): Ruta al archivo del polígono (GeoJSON o Shapefile)
-        output_path (str): Directorio donde guardar el recorte resultante
-        
-    Returns:
-        str: Ruta al archivo recortado o None si ocurre un error
     """
-    
     try:
         print(f"Recortando mosaico {os.path.basename(mosaic_path)} con polígono...")
-        
         # Crear directorio para recortes si no existe
         os.makedirs(output_path, exist_ok=True)
-        
         # Ruta del archivo de salida
         band_name = os.path.basename(mosaic_path).replace("mosaic_", "").replace(".tif", "")
         output_file = os.path.join(output_path, f"clip_{band_name}.tif")
@@ -80,7 +69,6 @@ def extract_mosaic_by_polygon(mosaic_path, polygon_path, output_path):
         with rasterio.open(mosaic_path) as src:
             # Realizar el recorte
             out_image, out_transform = mask(src, geometries, crop=True, all_touched=True)
-            
             # Actualizar metadatos
             out_meta = src.meta.copy()
             out_meta.update({
@@ -113,17 +101,7 @@ def extract_mosaic_by_polygon(mosaic_path, polygon_path, output_path):
 def build_mosaic_per_band(band_files, output_path, band_name, temp_dir=None):
     """
     Crea un mosaico para una banda específica, priorizando escenas con menor nubosidad.
-    
-    Args:
-        band_files (list): Lista de tuplas (ruta_archivo, cloud_cover)
-        output_path (str): Directorio donde guardar el mosaico resultante
-        band_name (str): Nombre de la banda (ej: "B4")
-        temp_dir (str, optional): Directorio para archivos temporales
-        
-    Returns:
-        str: Ruta al mosaico creado
     """
-
     # Crear directorio para mosaicos si no existe
     os.makedirs(output_path, exist_ok=True)
     
@@ -132,28 +110,22 @@ def build_mosaic_per_band(band_files, output_path, band_name, temp_dir=None):
         temp_dir = os.path.join(output_path, "temp")
 
     os.makedirs(temp_dir, exist_ok=True)
-
     # Ordenar archivos por nubosidad (menor a mayor)
     sorted_files = sorted(band_files, key=lambda x: x[1])
-    
     # Ruta del mosaico final
     output_mosaic = os.path.join(output_path, f"mosaic_{band_name}.tif")
-    
     # Enfoque usando GDAL directamente (más control sobre el proceso)
     # Crear un archivo VRT para el mosaico
     vrt_path = os.path.join(temp_dir, f"mosaic_{band_name}.vrt")
-    
     # Definir opciones para el VRT
     # -allow_projection_difference: Permitir diferencias menores en proyecciones
     # -input_file_list: Usar un archivo con la lista de archivos de entrada
     # -resolution highest: Usar la resolución más alta disponible
-    
     # Crear un archivo de texto con la lista de archivos ordenados por nubosidad
     list_file = os.path.join(temp_dir, f"filelist_{band_name}.txt")
     with open(list_file, 'w') as f:
         for file, _ in sorted_files:
             f.write(file + '\n')
-    
     # Construir el comando para crear el VRT
     gdal_build_vrt_cmd = [
         'gdalbuildvrt',
@@ -162,7 +134,6 @@ def build_mosaic_per_band(band_files, output_path, band_name, temp_dir=None):
         '-input_file_list', list_file,
         vrt_path
     ]
-
     # Ejecutar el comando
     cmd = ' '.join(gdal_build_vrt_cmd)
     print(f"Ejecutando: {cmd}")
@@ -217,12 +188,6 @@ def build_mosaic_per_band(band_files, output_path, band_name, temp_dir=None):
 def get_cloud_cover(scene_dir):
     """
     Intenta obtener el porcentaje de nubosidad de los metadatos de la escena.
-    
-    Args:
-        scene_dir (str): Ruta del directorio de la escena
-        
-    Returns:
-        float: Porcentaje de nubosidad
     """
     info_files = glob.glob(os.path.join(scene_dir, "*MTL.json"))
     if info_files:
@@ -240,13 +205,6 @@ def get_cloud_cover(scene_dir):
 def get_scenes_by_band(download_path):
     """
     Busca todas las bandas descargadas y las organiza por tipo de banda.
-    
-    Args:
-        download_path (str): Ruta donde se encuentran las carpetas de escenas descargadas
-        
-    Returns:
-        dict: Diccionario con claves = nombres de bandas y valores = lista de tuplas 
-              (ruta_archivo, cloud_cover)
     """
     print("Buscando archivos de bandas descargadas...")
     
@@ -299,27 +257,22 @@ def generate_mosaics_and_clips(temp_dir=None):
     2. Crea mosaicos por banda
     3. Recorta los mosaicos según el polígono
     """
-
     script_dir = Path(__file__).parent
     data_path = script_dir.parent.parent / "data" / "temp" / "source"
-
     # Buscar archivos con extensión .geojson y .shp
     files = sorted(
         glob.glob(str(data_path / "*.geojson")) + glob.glob(str(data_path / "*.shp")),
         key=os.path.getmtime,
         reverse=True
     )
-
     if not files:
         raise Exception(f"No se encontró ningún archivo en: {data_path}")
-
     polygon_path = files[0]
 
     if not os.path.exists(polygon_path):
         raise Exception(f"El archivo del polígono {polygon_path} no existe.")
 
     download_path = script_dir.parent.parent / "data" / "temp" / "downloads"
-    
     try:
         msg = "Obteniendo bandas espectrales descargadas...\n"
         print(msg)
@@ -330,14 +283,11 @@ def generate_mosaics_and_clips(temp_dir=None):
 
     if not sorted_bands:
         raise Exception("No se encontraron bandas para procesar")
-
     processed_mosaics = {}
     output_mosaic = script_dir.parent.parent / "data" / "temp" / "processed" / "mosaic"
-
     msg = "Creando mosaico para cada banda...\n"
     print(msg)
     # yield msg
-
     for band, files in sorted_bands.items():
         try:
             print(f"\nCreando mosaico para la banda {band}...")
@@ -352,7 +302,6 @@ def generate_mosaics_and_clips(temp_dir=None):
         except Exception as e:
             print(f"Error al crear mosaico para banda {band}: {str(e)}")
             print(traceback.format_exc())
-
     if not processed_mosaics:
         raise Exception("No se pudo crear ningún mosaico.")
 
@@ -373,15 +322,12 @@ def generate_mosaics_and_clips(temp_dir=None):
         except Exception as e:
             print(f"Error al recortar mosaico para banda {band}: {str(e)}")
             print(traceback.format_exc())
-
     results = {
         "mosaicos": processed_mosaics,
         "recortes": created_clips
     }
-
     output_clips = script_dir.parent.parent / "data" / "exports"
     os.makedirs(output_clips, exist_ok=True)
-
     log_path = os.path.join(output_clips, "registro_procesamiento.json")
 
     try:

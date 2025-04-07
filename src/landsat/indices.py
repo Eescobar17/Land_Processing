@@ -10,11 +10,6 @@ def read_band(file_path):
     """
     Lee una banda desde un archivo .tif y la devuelve como array numpy.
     
-    Args:
-        file_path: Ruta al archivo TIFF
-        
-    Returns:
-        numpy.ndarray: Datos de la banda
     """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"El archivo {file_path} no existe")
@@ -28,12 +23,6 @@ def read_band(file_path):
 def get_required_bands_for_index(index_name):
     """
     Devuelve las bandas necesarias para calcular un índice determinado.
-    
-    Args:
-        index_name (str): Nombre del índice
-        
-    Returns:
-        list: Lista de bandas necesarias
     """
     index_requirements = {
         "NDVI": ["B4", "B5"],      # Rojo, NIR
@@ -50,19 +39,10 @@ def process_indices_from_cutouts(clips_path, output_path, selected_indices):
     """
     Procesa los índices a partir de recortes generados previamente.
     
-    Args:
-        clips_path (str): Ruta donde se encuentran los archivos de recortes
-        output_path (str): Ruta donde guardar los índices calculados
-        selected_indices (list): Lista de índices a calcular
-        
-    Returns:
-        dict: Diccionario con información de los índices calculados
     """
     print("\n==== CALCULANDO ÍNDICES A PARTIR DE RECORTES ====")
-    
     # Crear directorio para resultados si no existe
-    os.makedirs(output_path, exist_ok=True)
-    
+    os.makedirs(output_path, exist_ok=True) 
     # Buscar recortes disponibles
     print("Buscando recortes disponibles...")
     clips = {}
@@ -70,12 +50,9 @@ def process_indices_from_cutouts(clips_path, output_path, selected_indices):
         if file.startswith("clip_B") and file.endswith(".tif"):
             band = file.replace("clip_", "").replace(".tif", "")
             clips[band] = os.path.join(clips_path, file)
-    
     if not clips:
-        raise Exception("No se encontraron archivos de recortes en", clips_path)
-    
+        raise Exception("No se encontraron archivos de recortes en", clips_path) 
     print(f"Recortes encontrados: {', '.join(clips.keys())}")
-    
     # Verificar qué índices podemos calcular con las bandas disponibles
     calculable_indices = []
     non_calculable_indices = {}
@@ -290,13 +267,6 @@ def process_indices_from_cutouts(clips_path, output_path, selected_indices):
 def process_indices_from_cutouts_wrapper(selected_indices):
     """
     Función envoltorio para procesar índices desde recortes.
-    
-    Args:
-        clips_path (str): Ruta donde se encuentran los recortes
-        selected_indices (list): Lista de índices a calcular
-        
-    Returns:
-        bool: True si el proceso fue exitoso, False en caso contrario
     """
 
     # Ruta basada en la ubicación del script

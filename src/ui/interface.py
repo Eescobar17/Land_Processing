@@ -32,19 +32,6 @@ class DatePickerDialog(QDialog):
         self.calendar = QCalendarWidget()
         layout.addWidget(self.calendar)
         
-
-
-        # # Si hay una fecha actual, establecerla
-        # if current_date and current_date != "dd/mm/yyyy":
-        #     try:
-        #         date = QDate.fromString(current_date, "dd/MM/yyyy")
-        #         if date.isValid():
-        #             self.calendar.setSelectedDate(date)
-        #     except:
-        #         pass
-        
-
-        
         # Botones
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -111,7 +98,9 @@ class GuideDialog(QDialog):
             <li>Seleccione la opción "Import GeoJson/Shp File"</li>
             <li>Haga clic en el campo de texto o en el botón "..." para seleccionar un archivo</li>
             <li>Configure los parámetros adicionales según sus necesidades</li>
-            <li>Presione "PROCESS" para iniciar el procesamiento</li>
+            <li>Presione "PROCESAR DATOS" para iniciar el procesamiento</li>
+            <li>Esperar que en la pantalla de resultados indique que las imagenes se hayan descargado</li>
+            <li>Presione "CALCULAR INDICES" para dar inicio al calculo de indices radiométricos </li>
         </ol>
         
         <h3>Modo de Generación de Polígono</h3>
@@ -123,7 +112,9 @@ class GuideDialog(QDialog):
             <li>Revise las coordenadas extraídas</li>
             <li>Haga clic en "Guardar Coordenadas" para exportar el polígono</li>
             <li>Configure los parámetros adicionales</li>
-            <li>Presione "PROCESS" para iniciar el procesamiento</li>
+            <li>Presione "PROCESAR DATOS" para iniciar el procesamiento</li>
+            <li>Esperar que en la pantalla de resultados indique que las imagenes se hayan descargado</li>
+            <li>Presione "CALCULAR INDICES" para dar inicio al calculo de indices radiométricos </li>
         </ol>
         
         <h3>Parámetros de Configuración</h3>
@@ -170,7 +161,6 @@ class ProcessThread(QThread):
 
     def run(self):
         """Ejecuta LandsatController"""
-
         try:
             gen = self.landsat_controller.fetch_data()  # Obtiene el generador
             
@@ -368,10 +358,55 @@ class MapAppWindow(QMainWindow):
             subcontrol-position: top right;
             width: 15px;
             border-left-width: 1px;
-            border-left-color: darkgray;
+            border-left-color: #FF9800;
             border-left-style: solid;
             border-top-right-radius: 3px;
             border-bottom-right-radius: 3px;
+        }
+        QComboBox::down-arrow {
+            image: none;
+            width: 8px;
+            height: 8px;
+            background: #FF9800;
+            border-radius: 4px;
+        }
+        /* Calendario */
+        QCalendarWidget {
+            background-color: #3E2723;
+            color: #FFFFFF;
+        }
+        
+        QCalendarWidget QWidget {
+            alternate-background-color: #5D4037;
+        }
+        
+        QCalendarWidget QAbstractItemView:enabled {
+            background-color: #3E2723;
+            color: #FFFFFF;
+            selection-background-color: #FF9800;
+            selection-color: #000000;
+        }
+        
+        QCalendarWidget QAbstractItemView:disabled {
+            color: #795548;
+        }
+        
+        QCalendarWidget QToolButton {
+            color: #FFFFFF;
+            background-color: #5D4037;
+            border: 1px solid #8D6E63;
+        }
+        
+        QCalendarWidget QMenu {
+            background-color: #3E2723;
+            color: #FFFFFF;
+        }
+        
+        QCalendarWidget QSpinBox {
+            background-color: #5D4037;
+            color: #FFFFFF;
+            selection-background-color: #FF9800;
+            selection-color: #000000;
         }
         
         /* Estilo para los campos específicos de importar/generar */
@@ -765,7 +800,7 @@ class MapAppWindow(QMainWindow):
         self.calculate_button.setFixedSize(170, 50)
         self.calculate_button.setStyleSheet("font-weight: bold; font-size: 14px;")
         self.calculate_button.clicked.connect(self.calculate_indices)
-        self.calculate_button.setEnabled(True)
+        self.calculate_button.setEnabled(False)
         process_layout.addWidget(self.calculate_button)
 
         # Añadir espacio después de los botones
@@ -803,8 +838,6 @@ class MapAppWindow(QMainWindow):
         """
         Crea un mapa de Folium con herramientas de dibujo y lo guarda como HTML.
         
-        Returns:
-            str: Ruta al archivo HTML del mapa.
         """
         # Crear mapa centrado en Colombia
         m = folium.Map(location=[4.6097, -74.0817], zoom_start=6)
@@ -1001,9 +1034,6 @@ class MapAppWindow(QMainWindow):
     def process_javascript_result(self, result):
         """
         Procesa el resultado del JavaScript y extrae las coordenadas.
-        
-        Args:
-            result (str): Resultado en formato GeoJSON.
         """
         try:
             self.results_text.clear()
@@ -1046,10 +1076,6 @@ class MapAppWindow(QMainWindow):
             # Habilitar el botón de guardar
             self.save_button.setEnabled(True)
             
-            # # También, si estamos en modo import, actualizar el campo de búsqueda
-            # if self.import_mode:
-            #     self.search_entry.setText("Polígono dibujado manualmente")
-            
         except Exception as e:
             self.results_text.append(f"Error al procesar el resultado: {str(e)}")
             self.results_text.append("Detalles del error para depuración:")
@@ -1060,11 +1086,6 @@ class MapAppWindow(QMainWindow):
         """
         Extrae las coordenadas de polígonos desde un objeto GeoJSON.
         
-        Args:
-            data (dict): Objeto GeoJSON.
-            
-        Returns:
-            list: Lista de polígonos, donde cada polígono es una lista de coordenadas [lat, lon].
         """
         polygons = []
         
@@ -1590,37 +1611,6 @@ class MapAppWindow(QMainWindow):
         
         # Mostrar la ventana
         dialog.show()
-"""
-   def calculate_indices(self):
-        from ..landsat import generate_mosaics_and_clips
 
-        generate_mosaics_and_clips()
-
-        # ------------------------------------------
-        # Procesar datos mediante hilo independiente
-        # ------------------------------------------
-        # config = {
-        #     "selected_indices": ["NDVI"]
-        # }
-
-        # self.second_thread = SecondProcessThread(config)
-        # self.second_thread.result_ready.connect(self.handle_second_result)
-        # self.second_thread.error_occurred.connect(self.handle_second_error)
-        # self.second_thread.start()
-
-    def handle_second_result(self, result):
-        # Muestra un mensaje cuando finaliza el proceso y habilita el botón si es necesario
-        
-        if isinstance(result, tuple) and len(result) == 2:
-            message, _ = result  # Desempaquetar la tupla
-            self.results_text.append(message)  # Agregar mensaje a la interfaz
-        else:
-            self.results_text.append(str(result))  # Si no es una tupla, solo mostrar el mensaje
-
-    def handle_second_error(self, error_message):
-        print(f"Se produjo un error en el hilo: {error_message}")
-        self.generate_error("Error", error_message)
-        
-"""
 
     

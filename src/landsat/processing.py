@@ -15,12 +15,6 @@ from adjustText import adjust_text
 def get_footprint_from_feature(feature):
     """
     Extrae la huella (footprint) de una característica (feature) de Landsat.
-    
-    Args:
-        feature: Característica de Landsat (de la API STAC)
-        
-    Returns:
-        shapely.geometry.Polygon: Huella de la imagen
     """
 
     # Intentar obtener la huella directamente de los metadatos
@@ -51,15 +45,6 @@ def get_footprint_from_feature(feature):
 def visualize_coverage(relative_path, features, selected_scenes=None, coverage_percent=None):
     """
     Genera una visualización de la cobertura del polígono por las escenas Landsat.
-    
-    Args:
-        relative_path: Ruta al archivo GeoJSON o Shapefile del polígono
-        features: Lista de características (features) de Landsat
-        selected_scenes: Lista de escenas seleccionadas para destacar
-        coverage_percent: Porcentaje de cobertura total
-        
-    Returns:
-        str: Ruta al archivo de visualización generado
     """
     
     # Leer el polígono
@@ -264,14 +249,6 @@ def analyze_coverage(relative_path, features, min_area, window_days=120, delete_
     """
     Analiza la cobertura del polígono por las escenas Landsat con enfoque en Path/Row.
     Prioriza cobertura espacial, luego minimiza nubosidad y finalmente ajusta coherencia temporal.
-    
-    Args:
-        features: Lista de características (features) de Landsat
-        window_days: Ventana de tiempo entre cuadrantes
-        delete_out_range: Si True, elimina los path_row que no pueden ajustarse a la ventana
-        
-    Returns:
-        dict: Información de cobertura incluyendo porcentaje y escenas necesarias
     """
     
     print("Analizando cobertura con enfoque optimizado en Path/Row...")
@@ -405,10 +382,6 @@ def analyze_coverage(relative_path, features, min_area, window_days=120, delete_
 def process_metadata(features, min_area=0):
     """
     Procesa los datos según la configuración actual.
-    
-    Returns:
-        msg: Mensaje para informar sobre el proceso
-        scenes: Ids de las escenas necesarias a descargar
     """
 
     msg = ""
