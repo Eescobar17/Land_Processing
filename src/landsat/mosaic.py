@@ -9,11 +9,14 @@ import subprocess
 import rasterio
 from shapely.geometry import mapping, box
 import traceback
+import re
+import numpy as np
 gdal.UseExceptions()
 
 def extract_mosaic_by_polygon(mosaic_path, polygon_path, output_path):
     """
     Recorta un mosaico de banda utilizando un polígono con manejo de diferentes CRS.
+    También crea una máscara binaria que indica el área de interés dentro del recorte.
     """
     try:
         print(f"Recortando mosaico {os.path.basename(mosaic_path)} con polígono...")
@@ -22,6 +25,7 @@ def extract_mosaic_by_polygon(mosaic_path, polygon_path, output_path):
         # Ruta del archivo de salida
         band_name = os.path.basename(mosaic_path).replace("mosaic_", "").replace(".tif", "")
         output_file = os.path.join(output_path, f"clip_{band_name}.tif")
+        mask_file = os.path.join(output_path, f"aoi_mask.tif")
         
         # Abrir el mosaico para obtener su CRS y extensión
         with rasterio.open(mosaic_path) as src:
@@ -44,9 +48,6 @@ def extract_mosaic_by_polygon(mosaic_path, polygon_path, output_path):
         if poligono_crs != raster_crs:
             print(f"Reproyectando polígono de {poligono_crs} a {raster_crs}")
             poligono_gdf = poligono_gdf.to_crs(raster_crs)
-        
-        # Crear un GeoDataFrame con el bbox del raster para verificar intersección
-        # raster_gdf = gpd.GeoDataFrame(geometry=[raster_bbox], crs=raster_crs)
         
         # Verificar intersección espacial antes de intentar recortar
         intersects = False
@@ -84,13 +85,44 @@ def extract_mosaic_by_polygon(mosaic_path, polygon_path, output_path):
             # Guardar el resultado
             with rasterio.open(output_file, "w", **out_meta) as dest:
                 dest.write(out_image)
+            
+            # NUEVO: Crear una máscara binaria del área del polígono
+            # Inicializar una máscara con ceros (fuera del área)
+            mask_array = np.zeros((out_image.shape[1], out_image.shape[2]), dtype=np.uint8)
+            
+            # Rasterizar el polígono sobre la máscara
+            from rasterio import features
+            
+            # Crear una ventana de transformación ajustada al recorte
+            for geom in poligono_gdf.geometry:
+                # Rasterizar cada geometría como 1 en la máscara
+                features.rasterize(
+                    [(geom, 1)],
+                    out=mask_array,
+                    transform=out_transform,
+                    all_touched=True
+                )
+            
+            # Guardar la máscara como GeoTIFF
+            mask_meta = out_meta.copy()
+            mask_meta.update({
+                "count": 1,
+                "dtype": "uint8",
+                "nodata": 0
+            })
+            
+            with rasterio.open(mask_file, "w", **mask_meta) as dest:
+                dest.write(mask_array, 1)
+            
+            print(f"Máscara del área de interés creada en {mask_file}")
         
         # Verificar que el archivo se haya creado correctamente
-        if os.path.exists(output_file):
+        if os.path.exists(output_file) and os.path.exists(mask_file):
             print(f"Recorte para banda {band_name} creado en {output_file}")
+            print(f"Máscara para el área de interés creada en {mask_file}")
             return output_file
         else:
-            print(f"Error: No se pudo crear el archivo {output_file}")
+            print(f"Error: No se pudieron crear los archivos de salida")
             return None
             
     except Exception as e:
@@ -114,18 +146,17 @@ def build_mosaic_per_band(band_files, output_path, band_name, temp_dir=None):
     sorted_files = sorted(band_files, key=lambda x: x[1])
     # Ruta del mosaico final
     output_mosaic = os.path.join(output_path, f"mosaic_{band_name}.tif")
+    
     # Enfoque usando GDAL directamente (más control sobre el proceso)
     # Crear un archivo VRT para el mosaico
     vrt_path = os.path.join(temp_dir, f"mosaic_{band_name}.vrt")
-    # Definir opciones para el VRT
-    # -allow_projection_difference: Permitir diferencias menores en proyecciones
-    # -input_file_list: Usar un archivo con la lista de archivos de entrada
-    # -resolution highest: Usar la resolución más alta disponible
+    
     # Crear un archivo de texto con la lista de archivos ordenados por nubosidad
     list_file = os.path.join(temp_dir, f"filelist_{band_name}.txt")
     with open(list_file, 'w') as f:
         for file, _ in sorted_files:
             f.write(file + '\n')
+    
     # Construir el comando para crear el VRT
     gdal_build_vrt_cmd = [
         'gdalbuildvrt',
@@ -134,6 +165,7 @@ def build_mosaic_per_band(band_files, output_path, band_name, temp_dir=None):
         '-input_file_list', list_file,
         vrt_path
     ]
+    
     # Ejecutar el comando
     cmd = ' '.join(gdal_build_vrt_cmd)
     print(f"Ejecutando: {cmd}")
@@ -153,10 +185,6 @@ def build_mosaic_per_band(band_files, output_path, band_name, temp_dir=None):
         subprocess.run(cmd, shell=True, check=True) # Ejecutar como proceso externo si falla la API
 
     # Convertir el VRT al mosaico GeoTIFF final
-    # -co COMPRESS=DEFLATE: Usar compresión DEFLATE
-    # -co PREDICTOR=2: Usar predictor para mejorar compresión
-    # -co TILED=YES: Usar estructura de tiles
-    
     gdal_translate_cmd = [
         'gdal_translate',
         '-co', 'COMPRESS=DEFLATE',
@@ -185,6 +213,25 @@ def build_mosaic_per_band(band_files, output_path, band_name, temp_dir=None):
     
     return output_mosaic
 
+def extract_collection_indicator(filename):
+    """
+    Extrae el indicador de colección (SR o ST) de un nombre de archivo.
+    """
+    # Patrones de búsqueda para identificar la colección
+    sr_patterns = ["_SR_", "_sr_", "sr_"]
+    st_patterns = ["_ST_", "_st_", "st_"]
+    
+    for pattern in sr_patterns:
+        if pattern in filename:
+            return "SR"
+    
+    for pattern in st_patterns:
+        if pattern in filename:
+            return "ST"
+    
+    # Por defecto, asumimos SR
+    return "SR"
+
 def get_cloud_cover(scene_dir):
     """
     Intenta obtener el porcentaje de nubosidad de los metadatos de la escena.
@@ -204,7 +251,8 @@ def get_cloud_cover(scene_dir):
 
 def get_scenes_by_band(download_path):
     """
-    Busca todas las bandas descargadas y las organiza por tipo de banda.
+    Busca todas las bandas descargadas y las organiza por tipo de banda,
+    diferenciando entre colecciones SR y ST.
     """
     print("Buscando archivos de bandas descargadas...")
     
@@ -212,8 +260,6 @@ def get_scenes_by_band(download_path):
     
     # Buscar todas las carpetas de escenas (asumimos que son subdirectorios del download_path)
     for scene_dir in glob.glob(os.path.join(download_path, "scene_*")):
-        # Obtener el porcentaje de nubosidad de la escena
-        # Buscamos en el nombre del directorio o en algún archivo de metadatos
         try:
             # Intentar obtener desde un archivo de metadatos si existe
             cloud_cover = get_cloud_cover(scene_dir)
@@ -225,20 +271,24 @@ def get_scenes_by_band(download_path):
         # Buscar todos los archivos TIF en esta carpeta
         for tif_file in glob.glob(os.path.join(scene_dir, "*.TIF")):
             # Determinar a qué banda corresponde el archivo
-            # Ejemplo: LC09_L2SP_007057_20220315_20220317_02_T1_B4.TIF -> B4
             filename = os.path.basename(tif_file)
             
-            # Extraer el nombre de la banda (asumimos formato *_B[número].TIF)
-            for i in range(1, 12):  # Bandas de Landsat 8/9
-                band = f"B{i}"
-                if f"_{band}." in filename:
-                    # Si la banda no está en el diccionario, crear una lista vacía
-                    if band not in sorted_bands:
-                        sorted_bands[band] = []
-                    
-                    # Agregar la ruta del archivo y el porcentaje de nubosidad
-                    sorted_bands[band].append((tif_file, cloud_cover))
-                    break
+            # Extraer el nombre de la banda usando una expresión regular más robusta
+            band_match = re.search(r'_B(\d+)\.', filename)
+            if band_match:
+                band_number = band_match.group(1)
+                band = f"B{band_number}"
+                
+                # Determinar la colección (SR o ST)
+                collection = extract_collection_indicator(filename)
+                band_key = f"{band}_{collection}"
+                
+                # Si la banda no está en el diccionario, crear una lista vacía
+                if band_key not in sorted_bands:
+                    sorted_bands[band_key] = []
+                
+                # Agregar la ruta del archivo y el porcentaje de nubosidad
+                sorted_bands[band_key].append((tif_file, cloud_cover))
     
     # Verificar si encontramos bandas
     if not sorted_bands:
@@ -276,7 +326,7 @@ def generate_mosaics_and_clips(temp_dir=None):
     try:
         msg = "Obteniendo bandas espectrales descargadas...\n"
         print(msg)
-        # yield msg
+        yield msg
         sorted_bands = get_scenes_by_band(download_path)
     except Exception as e:
         raise str(e)
@@ -287,7 +337,7 @@ def generate_mosaics_and_clips(temp_dir=None):
     output_mosaic = script_dir.parent.parent / "data" / "temp" / "processed" / "mosaic"
     msg = "Creando mosaico para cada banda...\n"
     print(msg)
-    # yield msg
+    yield msg
     for band, files in sorted_bands.items():
         try:
             print(f"\nCreando mosaico para la banda {band}...")

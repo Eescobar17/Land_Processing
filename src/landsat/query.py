@@ -25,15 +25,24 @@ def generate_landsat_query(
         collections=["landsat-c2l2-sr"],
         limit=100
     ):
-
     """
-    Genera una consulta para la API LandsatLook desde un GeoJSON o Shapefile.
+    Genera consultas para la API LandsatLook desde un GeoJSON o Shapefile.
+    Ahora gestiona múltiples colecciones si es necesario.
     """  
-
-    # Crear el query dependiendo del modo de importación
+    # Determinar qué colecciones necesitamos basadas en los índices seleccionados
+    required_collections = set(collections)
+    
+    # Si LST está entre los índices seleccionados, añadimos la colección de temperatura superficial
+    if "LST" in selected_indices and "landsat-c2l2-st" not in required_collections:
+        required_collections.add("landsat-c2l2-st")
+        print(f"Añadiendo colección 'landsat-c2l2-st' para el índice LST")
+    
+    # Convertir de nuevo a lista para la consulta
+    required_collections = list(required_collections)
+    
+    # Crear parámetros de consulta base
     if path_row_mode:
-        query = {
-            "collections": collections,
+        base_query = {
             "query": {
                 "eo:cloud_cover": {"lte": cloud_cover},
                 "platform": {"in": platform},
@@ -47,8 +56,8 @@ def generate_landsat_query(
         }
     else:
         # Ruta basada en la ubicación del script
-        script_dir = Path(__file__).parent  # Carpeta donde está query.py
-        data_path = script_dir.parent.parent / "data" / "temp" / "source"  # Ruta a la carpeta con los archivos
+        script_dir = Path(__file__).parent
+        data_path = script_dir.parent.parent / "data" / "temp" / "source"
 
         # Buscar archivos con extensión .geojson y .shp
         files = sorted(
@@ -66,9 +75,8 @@ def generate_landsat_query(
         # Obtener la geometría en formato GeoJSON
         geom = json.loads(gdf.to_json())['features'][0]['geometry']
 
-        query = {
+        base_query = {
             "intersects": geom,
-            "collections": collections,
             "query": {
                 "eo:cloud_cover": {"lte": cloud_cover},
                 "platform": {"in": platform},
@@ -79,7 +87,11 @@ def generate_landsat_query(
             "limit": limit
         }
     
-    return query
+    # Devolver la consulta con todas las colecciones
+    final_query = base_query.copy()
+    final_query["collections"] = required_collections
+    
+    return final_query
 
 def fetch_stac_server(query):
     """
@@ -94,6 +106,9 @@ def fetch_stac_server(query):
     }
 
     url = f"https://landsatlook.usgs.gov/stac-server/search"
+    
+    print(f"Ejecutando consulta a {url} con colecciones: {query.get('collections', [])}")
+    
     data = requests.post(url, headers=headers, json=query).json()
     error = data.get("message", "")
     
@@ -103,8 +118,9 @@ def fetch_stac_server(query):
     context = data.get("context", {})
     if not context.get("matched"):
         return []
-    print(context)
-
+    
+    print(f"Consulta exitosa. Encontrados: {context.get('matched')} resultados")
+    
     features = data["features"]
     if data["links"]:
         query["page"] += 1
@@ -112,4 +128,9 @@ def fetch_stac_server(query):
 
         features = list(itertools.chain(features, fetch_stac_server(query)))
 
+    # Agregar información de la colección a cada feature
+    for feature in features:
+        if "collection" not in feature and "collection" in query:
+            feature["collection"] = query["collection"]
+    
     return features

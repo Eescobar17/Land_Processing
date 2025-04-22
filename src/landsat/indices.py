@@ -5,18 +5,20 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 import json
 from pathlib import Path
+import glob
 
 def read_band(file_path):
     """
     Lee una banda desde un archivo .tif y la devuelve como array numpy.
-    
     """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"El archivo {file_path} no existe")
     
     try:
         with rasterio.open(file_path) as dataset:
-            return dataset.read(1).astype(np.float32)
+            # Leer los datos y guardar el profile para usarlo después
+            data = dataset.read(1).astype(np.float32)
+            return data
     except Exception as e:
         raise IOError(f"Error al leer el archivo {file_path}: {str(e)}")
 
@@ -25,69 +27,178 @@ def get_required_bands_for_index(index_name):
     Devuelve las bandas necesarias para calcular un índice determinado.
     """
     index_requirements = {
-        "NDVI": ["B4", "B5"],      # Rojo, NIR
-        "NDWI": ["B3", "B5"],      # Verde, NIR
-        "NDSI": ["B3", "B6"],      # Verde, SWIR
-        "BSI": ["B2", "B4", "B5", "B6"],  # Azul, Rojo, NIR, SWIR1
-        "LST": ["B10"]             # Térmico
+        "NDVI": {"B4": "sr", "B5": "sr"},      # Rojo, NIR
+        "NDWI": {"B3": "sr", "B5": "sr"},      # Verde, NIR
+        "NDSI": {"B3": "sr", "B6": "sr"},      # Verde, SWIR
+        "BSI": {"B2": "sr", "B4": "sr", "B5": "sr", "B6": "sr"},  # Azul, Rojo, NIR, SWIR1
+        "LST": {"B10": "st", "B4": "sr", "B5": "sr"}  # Térmico, Rojo, NIR para emisividad
     }
     
-    # Siempre devolver una lista (incluso vacía) para evitar el error NoneType
-    return index_requirements.get(index_name, [])
+    # Devuelve un diccionario que mapea bandas a colecciones
+    return index_requirements.get(index_name, {})
+
+def find_metadata_files(base_path):
+    """
+    Busca archivos de metadatos MTL.json en la ruta dada y sus subdirectorios.
+    """
+    metadata_files = {
+        "sr": [],
+        "st": []
+    }
+    
+    # Buscar en la ruta base y todas las subcarpetas
+    for root, dirs, files in os.walk(base_path):
+        for file in files:
+            if file.endswith("MTL.json"):
+                file_path = os.path.join(root, file)
+                
+                # Determinar si es SR o ST
+                if "_SR_" in file or "_sr_" in file.lower():
+                    metadata_files["sr"].append(file_path)
+                elif "_ST_" in file or "_st_" in file.lower():
+                    metadata_files["st"].append(file_path)
+                else:
+                    # Si no está claro, intentar inferir de la ruta
+                    if "sr" in file_path.lower() and "st" not in file_path.lower():
+                        metadata_files["sr"].append(file_path)
+                    elif "st" in file_path.lower():
+                        metadata_files["st"].append(file_path)
+    
+    return metadata_files
+
+def load_thermal_constants(metadata_files):
+    """
+    Carga las constantes térmicas desde un archivo de metadatos ST.
+    """
+    # Valores por defecto en caso de error
+    constants = {
+        "K1": 774.8853,  # K1 para Landsat 8/9 banda 10
+        "K2": 1321.0789,  # K2 para Landsat 8/9 banda 10
+        "ML": 0.0003342,  # Multiplicador radiancia
+        "AL": 0.1,         # Aditivo radiancia
+    }
+    
+    if not metadata_files.get("st"):
+        print("No se encontraron archivos de metadatos ST. Usando valores por defecto.")
+        return constants
+    
+    # Intentar cargar desde cada archivo hasta encontrar uno válido
+    for metadata_file in metadata_files["st"]:
+        try:
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+            
+            # Extraer coeficientes de calibración para banda térmica
+            if "LANDSAT_METADATA_FILE" in metadata:
+                if "LEVEL2_SURFACE_TEMPERATURE_PARAMETERS" in metadata["LANDSAT_METADATA_FILE"]:
+                    thermal_constants = metadata["LANDSAT_METADATA_FILE"]["LEVEL2_SURFACE_TEMPERATURE_PARAMETERS"]
+                    constants["K1"] = float(thermal_constants["K1_CONSTANT_BAND_10"])
+                    constants["K2"] = float(thermal_constants["K2_CONSTANT_BAND_10"])
+                
+                if "LEVEL1_RADIOMETRIC_RESCALING" in metadata["LANDSAT_METADATA_FILE"]:
+                    calib = metadata["LANDSAT_METADATA_FILE"]["LEVEL1_RADIOMETRIC_RESCALING"]
+                    constants["ML"] = float(calib["RADIANCE_MULT_BAND_10"])
+                    constants["AL"] = float(calib["RADIANCE_ADD_BAND_10"])
+                
+                print(f"Constantes térmicas cargadas de {os.path.basename(metadata_file)}")
+                return constants
+        except Exception as e:
+            print(f"Error al cargar constantes de {metadata_file}: {e}")
+    
+    print("No se pudieron cargar constantes térmicas de los archivos. Usando valores por defecto.")
+    return constants
+
+def find_band_files(clips_path, band_code, collection=None):
+    """
+    Busca archivos de bandas según el código de banda y la colección.
+    Devuelve el primer archivo encontrado o None si no encuentra ninguno.
+    """
+    # Patrones de búsqueda
+    patterns = [
+        f"clip_{band_code}.tif",  # Patrón normal
+        f"clip_{band_code}_*.tif",  # Con sufijo
+        f"*{band_code}.tif",  # Cualquier prefijo
+        f"*{band_code}_*.tif"  # Cualquier combinación
+    ]
+    
+    # Si se especifica colección, añadir patrones específicos
+    if collection:
+        collection_suffix = collection.upper()
+        patterns.extend([
+            f"clip_{band_code}_{collection_suffix}.tif",
+            f"*{band_code}_{collection_suffix}.tif"
+        ])
+    
+    # Buscar archivos que coincidan con los patrones
+    for pattern in patterns:
+        matching_files = glob.glob(os.path.join(clips_path, pattern))
+        if matching_files:
+            return matching_files[0]
+    
+    # Si llegamos aquí, no se encontró ningún archivo
+    return None
 
 def process_indices_from_cutouts(clips_path, output_path, selected_indices):
     """
     Procesa los índices a partir de recortes generados previamente.
-    
     """
     print("\n==== CALCULANDO ÍNDICES A PARTIR DE RECORTES ====")
     # Crear directorio para resultados si no existe
     os.makedirs(output_path, exist_ok=True) 
-    # Buscar recortes disponibles
-    print("Buscando recortes disponibles...")
-    clips = {}
-    for file in os.listdir(clips_path):
-        if file.startswith("clip_B") and file.endswith(".tif"):
-            band = file.replace("clip_", "").replace(".tif", "")
-            clips[band] = os.path.join(clips_path, file)
-    if not clips:
-        raise Exception("No se encontraron archivos de recortes en", clips_path) 
-    print(f"Recortes encontrados: {', '.join(clips.keys())}")
-    # Verificar qué índices podemos calcular con las bandas disponibles
+    
+    # Intentar cargar la máscara del área de interés
+    mask_file = os.path.join(clips_path, "aoi_mask.tif")
+    if os.path.exists(mask_file):
+        print(f"Se encontró máscara del área de interés: {mask_file}")
+        try:
+            with rasterio.open(mask_file) as src:
+                mask_data = src.read(1)
+                # Convertir a booleano (True donde valor es > 0)
+                area_mask = mask_data > 0
+                print(f"Máscara cargada: {np.sum(area_mask)} píxeles en el área de interés")
+        except Exception as e:
+            print(f"Error al cargar máscara: {str(e)}")
+            area_mask = None
+    else:
+        print("No se encontró máscara del área de interés. Se procesará toda la imagen.")
+        area_mask = None
+    
+    # Buscar archivos de metadatos
+    download_path = Path(clips_path).parent.parent / "downloads"
+    metadata_files = find_metadata_files(download_path)
+    thermal_constants = load_thermal_constants(metadata_files)
+    
+    print(f"Constantes térmicas: K1={thermal_constants['K1']}, K2={thermal_constants['K2']}")
+    
+    # Verificar qué índices podemos calcular
     calculable_indices = []
-    non_calculable_indices = {}
+    missing_bands_info = {}
     
     for index in selected_indices:
         required_bands = get_required_bands_for_index(index)
+        missing_bands = []
         
-        # Verificar qué bandas faltan
-        missing_bands = [band for band in required_bands if band not in clips]
+        # Verificar cada banda requerida
+        for band, collection in required_bands.items():
+            band_file = find_band_files(clips_path, band, collection)
+            if not band_file:
+                missing_bands.append(f"{band} ({collection})")
         
         if not missing_bands:
             calculable_indices.append(index)
         else:
-            non_calculable_indices[index] = missing_bands
+            missing_bands_info[index] = missing_bands
     
     if not calculable_indices:
         print("No se pueden calcular los índices solicitados debido a bandas faltantes:")
-        for indice, faltantes in non_calculable_indices.items():
-            print(f" - {index}: Faltan bandas {', '.join(faltantes)}")
+        for index, missing in missing_bands_info.items():
+            print(f" - {index}: Faltan bandas {', '.join(missing)}")
         return {}
     
     print(f"Índices a calcular: {', '.join(calculable_indices)}")
     
     # Preparar estructura para los resultados
     output_files = {}
-    
-    # Cargar todas las bandas necesarias de una sola vez
-    bands = {}
-    for band_code in clips.keys():
-        try:
-            print(f"Cargando banda {band_code}...")
-            bands[band_code] = read_band(clips[band_code])
-            print(f" - {band_code}: OK")
-        except Exception as e:
-            print(f" - {band_code}: ERROR - {str(e)}")
     
     # Procesar cada índice
     for index in calculable_indices:
@@ -99,118 +210,178 @@ def process_indices_from_cutouts(clips_path, output_path, selected_indices):
             png_path = os.path.join(output_path, f"{index}.png")
             output_files[index] = {'tiff': tiff_path, 'png': png_path}
             
+            # Determinar las bandas necesarias
+            required_bands = get_required_bands_for_index(index)
+            
+            # Cargar las bandas
+            band_data = {}
+            band_profile = None
+            
+            for band, collection in required_bands.items():
+                band_file = find_band_files(clips_path, band, collection)
+                if band_file:
+                    print(f"Cargando banda {band} desde {os.path.basename(band_file)}...")
+                    band_data[band] = read_band(band_file)
+                    
+                    # Guardar el profile de la primera banda para usarlo al guardar el resultado
+                    if band_profile is None:
+                        with rasterio.open(band_file) as src:
+                            band_profile = src.profile.copy()
+                else:
+                    print(f"Error: No se encontró archivo para la banda {band} ({collection})")
+            
+            # Verificar que se cargaron todas las bandas
+            if len(band_data) != len(required_bands):
+                print(f"Error: No se pudieron cargar todas las bandas para {index}")
+                continue
+            
             # Calcular el índice según su tipo
             if index == "NDVI":
-                # Verificar que tenemos las bandas necesarias
-                if "B4" in bands and "B5" in bands:
-                    red_data = bands["B4"]
-                    nir_data = bands["B5"]
-                    
-                    epsilon = 1e-10
-                    index_data = (nir_data - red_data) / (nir_data + red_data + epsilon)
-                    
-                    cmap_name = "RdYlGn"  # Rojo-Amarillo-Verde
-                    vmin, vmax = -1.0, 1.0
-                    title = "Índice de Vegetación de Diferencia Normalizada (NDVI)"
-                else:
-                    print(f"Error: Faltan bandas necesarias para NDVI")
-                    continue
+                red_data = band_data["B4"]
+                nir_data = band_data["B5"]
+                
+                epsilon = 1e-10
+                index_data = (nir_data - red_data) / (nir_data + red_data + epsilon)
+                
+                # Aplicar la máscara si existe
+                if area_mask is not None:
+                    # Asegurarse que las dimensiones coincidan
+                    if area_mask.shape == index_data.shape:
+                        # Establecer como NaN los valores fuera del área de interés
+                        index_data = np.where(area_mask, index_data, np.nan)
+                    else:
+                        print(f"Advertencia: Las dimensiones de la máscara ({area_mask.shape}) no coinciden con el índice ({index_data.shape})")
+                
+                cmap_name = "RdYlGn"  # Rojo-Amarillo-Verde
+                vmin, vmax = -1.0, 1.0
+                title = "Índice de Vegetación de Diferencia Normalizada (NDVI)"
                 
             elif index == "NDWI":
-                if "B3" in bands and "B5" in bands:
-                    green_data = bands["B3"]
-                    nir_data = bands["B5"]
-                    
-                    epsilon = 1e-10
-                    index_data = (green_data - nir_data) / (green_data + nir_data + epsilon)
-                    
-                    cmap_name = "Blues"  # Azules
-                    vmin, vmax = -1.0, 1.0
-                    title = "Índice de Agua de Diferencia Normalizada (NDWI)"
-                else:
-                    print(f"Error: Faltan bandas necesarias para NDWI")
-                    continue
+                green_data = band_data["B3"]
+                nir_data = band_data["B5"]
+                
+                epsilon = 1e-10
+                index_data = (green_data - nir_data) / (green_data + nir_data + epsilon)
+                
+                # Aplicar la máscara si existe
+                if area_mask is not None:
+                    # Asegurarse que las dimensiones coincidan
+                    if area_mask.shape == index_data.shape:
+                        # Establecer como NaN los valores fuera del área de interés
+                        index_data = np.where(area_mask, index_data, np.nan)
+                    else:
+                        print(f"Advertencia: Las dimensiones de la máscara ({area_mask.shape}) no coinciden con el índice ({index_data.shape})")
+                
+                cmap_name = "Blues"  # Azules
+                vmin, vmax = -1.0, 1.0
+                title = "Índice de Agua de Diferencia Normalizada (NDWI)"
                 
             elif index == "NDSI":
-                if "B3" in bands and "B6" in bands:
-                    green_data = bands["B3"]
-                    swir_data = bands["B6"]
-                    
-                    epsilon = 1e-10
-                    index_data = (green_data - swir_data) / (green_data + swir_data + epsilon)
-                    
-                    cmap_name = "Blues_r"  # Azules invertido
-                    vmin, vmax = -1.0, 1.0
-                    title = "Índice de Nieve de Diferencia Normalizada (NDSI)"
-                else:
-                    print(f"Error: Faltan bandas necesarias para NDSI")
-                    continue
+                green_data = band_data["B3"]
+                swir_data = band_data["B6"]
+                
+                epsilon = 1e-10
+                index_data = (green_data - swir_data) / (green_data + swir_data + epsilon)
+                
+                # Aplicar la máscara si existe
+                if area_mask is not None:
+                    # Asegurarse que las dimensiones coincidan
+                    if area_mask.shape == index_data.shape:
+                        # Establecer como NaN los valores fuera del área de interés
+                        index_data = np.where(area_mask, index_data, np.nan)
+                    else:
+                        print(f"Advertencia: Las dimensiones de la máscara ({area_mask.shape}) no coinciden con el índice ({index_data.shape})")
+                
+                cmap_name = "Blues_r"  # Azules invertido
+                vmin, vmax = -1.0, 1.0
+                title = "Índice de Nieve de Diferencia Normalizada (NDSI)"
                 
             elif index == "BSI":
-                if "B2" in bands and "B4" in bands and "B5" in bands and "B6" in bands:
-                    blue_data = bands["B2"]
-                    red_data = bands["B4"]
-                    nir_data = bands["B5"]
-                    swir_data = bands["B6"]
-                    
-                    epsilon = 1e-10
-                    num = (swir_data + red_data) - (nir_data + blue_data)
-                    den = (swir_data + red_data) + (nir_data + blue_data) + epsilon
-                    index_data = num / den
-                    
-                    cmap_name = "YlOrBr"  # Amarillo-Naranja-Marrón
-                    vmin, vmax = -1.0, 1.0
-                    title = "Índice de Suelo Desnudo (BSI)"
-                else:
-                    print(f"Error: Faltan bandas necesarias para BSI")
-                    continue
+                blue_data = band_data["B2"]
+                red_data = band_data["B4"]
+                nir_data = band_data["B5"]
+                swir_data = band_data["B6"]
+                
+                epsilon = 1e-10
+                num = (swir_data + red_data) - (nir_data + blue_data)
+                den = (swir_data + red_data) + (nir_data + blue_data) + epsilon
+                index_data = num / den
+                
+                # Aplicar la máscara si existe
+                if area_mask is not None:
+                    # Asegurarse que las dimensiones coincidan
+                    if area_mask.shape == index_data.shape:
+                        # Establecer como NaN los valores fuera del área de interés
+                        index_data = np.where(area_mask, index_data, np.nan)
+                    else:
+                        print(f"Advertencia: Las dimensiones de la máscara ({area_mask.shape}) no coinciden con el índice ({index_data.shape})")
+                
+                cmap_name = "YlOrBr"  # Amarillo-Naranja-Marrón
+                vmin, vmax = -1.0, 1.0
+                title = "Índice de Suelo Desnudo (BSI)"
                 
             elif index == "LST":
-                if "B10" in bands:
-                    thermal_data = bands["B10"]
-                    
-                    # Constantes para Landsat 8/9
-                    K1 = 774.8853
-                    K2 = 1321.0789
-                    
-                    # Convertir los números digitales a radiancia (aproximación)
-                    radiance = thermal_data * 0.1
-                    
-                    # Calcular temperatura en Kelvin a partir de radiancia
-                    epsilon = 0.95  # Emisividad (aproximada)
-                    index_data = K2 / (np.log((K1 / (radiance + 1e-10)) + 1))
-                    
-                    # Convertir de Kelvin a Celsius
-                    index_data = index_data - 273.15
-                    
-                    cmap_name = "jet"  # Jet (azul-cian-amarillo-rojo)
-                    vmin, vmax = 0, 50  # Celsius
-                    title = "Temperatura de Superficie (LST)"
+                # Cargar la banda térmica (B10)
+                thermal_data = band_data["B10"]
+                
+                # Imprimir información de diagnóstico
+                print(f"Banda térmica - Tipo de datos: {thermal_data.dtype}")
+                print(f"Banda térmica - Valores: min={np.min(thermal_data)}, max={np.max(thermal_data)}, media={np.mean(thermal_data)}")
+                
+                # Para Landsat 8 Collection 2 Level-2 Surface Temperature (ST)
+                # Los valores están en Kelvin multiplicados por 0.00341802 (escala) y con offset de 149.0
+                
+                # Verificar primero si los datos ya están en Celsius
+                if np.mean(thermal_data) > -50 and np.mean(thermal_data) < 60:
+                    print("Los datos parecen estar ya en Celsius")
+                    index_data = thermal_data
+                
+                # Verificar si están en Kelvin
+                elif np.mean(thermal_data) > 200 and np.mean(thermal_data) < 400:
+                    print("Los datos parecen estar en Kelvin")
+                    index_data = thermal_data - 273.15
+                
+                # Si no, aplicar la conversión para Collection 2 Level-2 ST
                 else:
-                    print(f"Error: Faltan bandas necesarias para LST")
-                    continue
+                    print("Aplicando conversión estándar para Landsat 8 Collection 2 Level-2 ST")
+                    # Factor de escala y offset de la documentación del USGS
+                    scale_factor = 0.00341802
+                    add_offset = 149.0
+                    
+                    # Convertir a temperatura en Kelvin
+                    kelvin_temp = thermal_data * scale_factor + add_offset
+                    print(f"Temperatura en Kelvin: min={np.min(kelvin_temp)}, max={np.max(kelvin_temp)}, media={np.mean(kelvin_temp)}")
+                    
+                    # Convertir a Celsius
+                    index_data = kelvin_temp - 273.15
+                
+                print(f"Temperatura final en Celsius: min={np.min(index_data)}, max={np.max(index_data)}, media={np.mean(index_data)}")
+                
+                # Aplicar límites realistas para Colombia (filtrar valores extremos)
+                # El Carmen de Viboral tiene un clima templado, esperamos temperaturas entre 5 y 35°C
+                index_data = np.clip(index_data, 0, 50)
+                
+                # Aplicar la máscara si existe
+                if area_mask is not None:
+                    if area_mask.shape == index_data.shape:
+                        index_data = np.where(area_mask, index_data, np.nan)
+                    else:
+                        print(f"Advertencia: Las dimensiones de la máscara ({area_mask.shape}) no coinciden con el índice ({index_data.shape})")
+                
+                # Configuración de visualización
+                cmap_name = "jet"
+                vmin, vmax = 10, 35  # Rango típico para El Carmen de Viboral
+                title = "Temperatura de Superficie (LST)"
                 
             else:
                 print(f"Índice {index} no implementado")
                 continue
             
-            # Obtener el perfil (metadatos geoespaciales) de una de las bandas originales
-            profile = None
-            for band_code in get_required_bands_for_index(index):
-                try:
-                    with rasterio.open(clips[band_code]) as src:
-                        profile = src.profile.copy()
-                        profile.update(dtype=rasterio.float32)
-                    break
-                except Exception as e:
-                    continue
-            
-            if not profile:
-                print(f"Error: No se pudo obtener el perfil de metadatos para {index}")
-                continue
+            # Actualizar el perfil para 32 bits
+            band_profile.update(dtype=rasterio.float32)
             
             # Guardar el índice como archivo GeoTIFF
-            with rasterio.open(tiff_path, 'w', **profile) as dst:
+            with rasterio.open(tiff_path, 'w', **band_profile) as dst:
                 # Reemplazar NaN con nodata
                 result_data_clean = np.where(np.isnan(index_data), -9999, index_data)
                 dst.write(result_data_clean.astype(np.float32), 1)
@@ -315,4 +486,3 @@ def process_indices_from_cutouts_wrapper(selected_indices):
     
     except Exception as e:
         raise Exception(f"Error al procesar índices: {str(e)}")
-

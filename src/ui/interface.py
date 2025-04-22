@@ -800,7 +800,7 @@ class MapAppWindow(QMainWindow):
         self.calculate_button.setFixedSize(170, 50)
         self.calculate_button.setStyleSheet("font-weight: bold; font-size: 14px;")
         self.calculate_button.clicked.connect(self.calculate_indices)
-        self.calculate_button.setEnabled(False)
+        self.calculate_button.setEnabled(True)
         process_layout.addWidget(self.calculate_button)
 
         # Añadir espacio después de los botones
