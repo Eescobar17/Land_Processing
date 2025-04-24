@@ -2,7 +2,8 @@ import rasterio
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
+from matplotlib.colors import Normalize, LinearSegmentedColormap, ListedColormap
+import json
 import json
 from pathlib import Path
 import glob
@@ -241,7 +242,7 @@ def process_indices_from_cutouts(clips_path, output_path, selected_indices):
                 nir_data = band_data["B5"]
                 
                 epsilon = 1e-10
-                index_data = (nir_data - red_data) / (nir_data + red_data + epsilon)
+                index_data = (nir_data - red_data) / (nir_data + red_data)
                 
                 # Aplicar la máscara si existe
                 if area_mask is not None:
@@ -252,9 +253,22 @@ def process_indices_from_cutouts(clips_path, output_path, selected_indices):
                     else:
                         print(f"Advertencia: Las dimensiones de la máscara ({area_mask.shape}) no coinciden con el índice ({index_data.shape})")
                 
-                cmap_name = "RdYlGn"  # Rojo-Amarillo-Verde
-                vmin, vmax = -1.0, 1.0
+                ndvi_colors = [
+                    '#d73027',  # Rojo: muy poca vegetación (-0.5)
+                    '#fdae61',  # Naranja claro: vegetación muy escasa (0.0)
+                    '#fee08b',  # Amarillo: vegetación escasa (0.2)
+                    '#a6d96a',  # Verde claro: vegetación moderada (0.5)
+                    '#66bd63',  # Verde: vegetación moderada-alta (0.6)
+                    '#1a9850',  # Verde intenso: vegetación densa (0.8)
+                    '#006837'   # Verde oscuro: vegetación muy densa (1.0)
+                ]
+                cmap_name = LinearSegmentedColormap.from_list('ndvi_custom',ndvi_colors )
+                
+                
+                # Rango absoluto para NDVI
+                vmin, vmax = -0.1, 1
                 title = "Índice de Vegetación de Diferencia Normalizada (NDVI)"
+                description = "(-1.0: Sin vegetación | +1.0: Vegetación densa)"
                 
             elif index == "NDWI":
                 green_data = band_data["B3"]
@@ -272,8 +286,8 @@ def process_indices_from_cutouts(clips_path, output_path, selected_indices):
                     else:
                         print(f"Advertencia: Las dimensiones de la máscara ({area_mask.shape}) no coinciden con el índice ({index_data.shape})")
                 
-                cmap_name = "Blues"  # Azules
-                vmin, vmax = -1.0, 1.0
+                cmap_name = "Greys_r"  # Azules
+                vmin, vmax = -1.0, 0.4
                 title = "Índice de Agua de Diferencia Normalizada (NDWI)"
                 
             elif index == "NDSI":
@@ -292,8 +306,8 @@ def process_indices_from_cutouts(clips_path, output_path, selected_indices):
                     else:
                         print(f"Advertencia: Las dimensiones de la máscara ({area_mask.shape}) no coinciden con el índice ({index_data.shape})")
                 
-                cmap_name = "Blues_r"  # Azules invertido
-                vmin, vmax = -1.0, 1.0
+                cmap_name = "Greys_r"  # Azules invertido
+                vmin, vmax = -1, 1.0
                 title = "Índice de Nieve de Diferencia Normalizada (NDSI)"
                 
             elif index == "BSI":
@@ -316,9 +330,32 @@ def process_indices_from_cutouts(clips_path, output_path, selected_indices):
                     else:
                         print(f"Advertencia: Las dimensiones de la máscara ({area_mask.shape}) no coinciden con el índice ({index_data.shape})")
                 
-                cmap_name = "YlOrBr"  # Amarillo-Naranja-Marrón
-                vmin, vmax = -1.0, 1.0
+                # CAMBIO 1: Paleta de colores más contrastante
+                cmap_name = "RdYlGn_r"  # Rojo-Amarillo-Verde invertido (verde para vegetación, rojo para suelo desnudo)
+                
+                # CAMBIO 7: Ajustar la escala de valores basado en los percentiles de los datos
+                # Esto enfatiza mejor las diferencias significativas
+                vmin, vmax = -0.10, 0.10  # Valores absolutos fijos para BSI
+                print(f"BSI - Rango fijo: vmin={vmin:.2f}, vmax={vmax:.2f}")
+                
                 title = "Índice de Suelo Desnudo (BSI)"
+                
+                # Añadir una descripción de la escala de BSI a la visualización
+                description = "Valores negativos: Vegetación | Valores cercanos a 0: Mixto | Valores positivos: Suelo desnudo"
+                
+                # CAMBIO 8: Crear una versión categorizada para visualización alternativa
+                png_path_categorized = os.path.join(output_path, f"{index}_categorizado.png")
+                
+                # Crear categorías para BSI (estos umbrales pueden ajustarse según las características del área)
+                """categories = [
+                    (-1.0, -0.3, "Vegetación densa", "darkgreen"),
+                    (-0.3, -0.1, "Vegetación moderada", "green"),
+                    (-0.1, 0.1, "Vegetación dispersa/Mixto", "yellowgreen"),
+                    (0.1, 0.3, "Suelo parcialmente expuesto", "orange"),
+                    (0.3, 1.0, "Suelo altamente expuesto", "darkred")
+                ]
+                
+                """
                 
             elif index == "LST":
                 # Cargar la banda térmica (B10)

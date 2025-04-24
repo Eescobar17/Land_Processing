@@ -47,8 +47,8 @@ def generate_landsat_query(
                 "eo:cloud_cover": {"lte": cloud_cover},
                 "platform": {"in": platform},
                 "landsat:collection_category": {"in": ["T1", "T2", "RT"]},
-                "landsat:wrs_path": {"eq": str(path).zfill(3)},
-                "landsat:wrs_row": {"eq": str(row).zfill(3)}
+                "landsat:wrs_path": {"eq": int(path)},
+                "landsat:wrs_row": {"eq": int(row)}
             },
             "datetime": f"{start_date}T00:00:00.000Z/{end_date}T23:59:59.999Z",
             "page": 1,
