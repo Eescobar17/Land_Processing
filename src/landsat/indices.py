@@ -32,7 +32,7 @@ def get_required_bands_for_index(index_name):
         "NDWI": {"B3": "sr", "B5": "sr"},      # Verde, NIR
         "NDSI": {"B3": "sr", "B6": "sr"},      # Verde, SWIR
         "BSI": {"B2": "sr", "B4": "sr", "B5": "sr", "B6": "sr"},  # Azul, Rojo, NIR, SWIR1
-        "LST": {"B10": "st", "B4": "sr", "B5": "sr"}  # Térmico, Rojo, NIR para emisividad
+        "LST": {"B10": "st"}  # Térmico
     }
     
     # Devuelve un diccionario que mapea bandas a colecciones
@@ -365,37 +365,21 @@ def process_indices_from_cutouts(clips_path, output_path, selected_indices):
                 print(f"Banda térmica - Tipo de datos: {thermal_data.dtype}")
                 print(f"Banda térmica - Valores: min={np.min(thermal_data)}, max={np.max(thermal_data)}, media={np.mean(thermal_data)}")
                 
-                # Para Landsat 8 Collection 2 Level-2 Surface Temperature (ST)
-                # Los valores están en Kelvin multiplicados por 0.00341802 (escala) y con offset de 149.0
                 
-                # Verificar primero si los datos ya están en Celsius
-                if np.mean(thermal_data) > -50 and np.mean(thermal_data) < 60:
-                    print("Los datos parecen estar ya en Celsius")
-                    index_data = thermal_data
-                
-                # Verificar si están en Kelvin
-                elif np.mean(thermal_data) > 200 and np.mean(thermal_data) < 400:
-                    print("Los datos parecen estar en Kelvin")
-                    index_data = thermal_data - 273.15
-                
-                # Si no, aplicar la conversión para Collection 2 Level-2 ST
-                else:
-                    print("Aplicando conversión estándar para Landsat 8 Collection 2 Level-2 ST")
-                    # Factor de escala y offset de la documentación del USGS
-                    scale_factor = 0.00341802
-                    add_offset = 149.0
+                print("Aplicando conversión estándar para Landsat 8 Collection 2 Level-2 ST")
+                # Factor de escala y offset de la documentación del USGS
+                scale_factor = 0.00341802
+                add_offset = 149.0
                     
-                    # Convertir a temperatura en Kelvin
-                    kelvin_temp = thermal_data * scale_factor + add_offset
-                    print(f"Temperatura en Kelvin: min={np.min(kelvin_temp)}, max={np.max(kelvin_temp)}, media={np.mean(kelvin_temp)}")
+                # Convertir a temperatura en Kelvin
+                kelvin_temp = thermal_data * scale_factor + add_offset
+                print(f"Temperatura en Kelvin: min={np.min(kelvin_temp)}, max={np.max(kelvin_temp)}, media={np.mean(kelvin_temp)}")
                     
-                    # Convertir a Celsius
-                    index_data = kelvin_temp - 273.15
+                # Convertir a Celsius
+                index_data = kelvin_temp - 273.15
                 
                 print(f"Temperatura final en Celsius: min={np.min(index_data)}, max={np.max(index_data)}, media={np.mean(index_data)}")
                 
-                # Aplicar límites realistas para Colombia (filtrar valores extremos)
-                # El Carmen de Viboral tiene un clima templado, esperamos temperaturas entre 5 y 35°C
                 index_data = np.clip(index_data, 0, 50)
                 
                 # Aplicar la máscara si existe
@@ -407,7 +391,7 @@ def process_indices_from_cutouts(clips_path, output_path, selected_indices):
                 
                 # Configuración de visualización
                 cmap_name = "jet"
-                vmin, vmax = 10, 35  # Rango típico para El Carmen de Viboral
+                vmin, vmax = 12, 40
                 title = "Temperatura de Superficie (LST)"
                 
             else:

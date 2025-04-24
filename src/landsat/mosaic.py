@@ -11,6 +11,7 @@ from shapely.geometry import mapping, box
 import traceback
 import re
 import numpy as np
+import shutil
 gdal.UseExceptions()
 
 def extract_mosaic_by_polygon(mosaic_path, polygon_path, output_path):
@@ -41,6 +42,43 @@ def extract_mosaic_by_polygon(mosaic_path, polygon_path, output_path):
         poligono_gdf = gpd.read_file(polygon_path)
         poligono_crs = poligono_gdf.crs
         
+        is_path_row_mode = False
+        try:
+            if poligono_gdf.empty or poligono_gdf.geometry.is_empty.all():
+                is_path_row_mode = True
+            else:
+                # Verificar si el archivo es del tipo "source_file" (generado) o no
+                polygon_filename = os.path.basename(polygon_path)
+                if not polygon_filename.startswith("source_file"):
+                    is_path_row_mode = True
+        except:
+            is_path_row_mode = True
+        
+        if is_path_row_mode:
+            print("Detectado modo path/row: Copiando el mosaico completo sin recortar")
+            # Simplemente copiar el archivo original
+            shutil.copy(mosaic_path, output_file)
+            
+            # Crear una máscara que cubra toda el área
+            with rasterio.open(mosaic_path) as src:
+                mask_array = np.ones((src.height, src.width), dtype=np.uint8)
+                mask_meta = src.meta.copy()
+                mask_meta.update({
+                    "count": 1,
+                    "dtype": "uint8",
+                    "nodata": 0
+                })
+                
+                with rasterio.open(mask_file, "w", **mask_meta) as dest:
+                    dest.write(mask_array, 1)
+            
+            print(f"Recorte para banda {band_name} creado en {output_file}")
+            print(f"Máscara para el área completa creada en {mask_file}")
+            return output_file
+        
+        
+        
+        
         print(f"CRS del polígono: {poligono_crs}")
         print(f"Extensión del polígono: {poligono_gdf.total_bounds}")
         
@@ -58,10 +96,32 @@ def extract_mosaic_by_polygon(mosaic_path, polygon_path, output_path):
         
         if not intersects:
             print("ERROR: El polígono no intersecta con el raster.")
-            print("Intentando generar un recorte del área completa del raster como alternativa...")
+            print("Utilizando el área completa del raster como alternativa...")
             
-            # Como alternativa, usar el bbox del raster como geometría de recorte
+            # Usar el bbox del raster como geometría de recorte
             geometries = [mapping(raster_bbox)]
+            
+            # Crear una copia del raster original sin recortar
+            output_file = os.path.join(output_path, f"clip_{band_name}.tif")
+            shutil.copy(mosaic_path, output_file)
+            
+            # Crear una máscara que cubra todo el raster (todos los píxeles válidos)
+            with rasterio.open(mosaic_path) as src:
+                mask_array = np.ones((src.height, src.width), dtype=np.uint8)
+                mask_meta = src.meta.copy()
+                mask_meta.update({
+                    "count": 1,
+                    "dtype": "uint8",
+                    "nodata": 0
+                })
+                
+                mask_file = os.path.join(output_path, f"aoi_mask.tif")
+                with rasterio.open(mask_file, "w", **mask_meta) as dest:
+                    dest.write(mask_array, 1)
+            
+            print(f"Recorte completo para banda {band_name} creado en {output_file}")
+            print(f"Máscara para el área completa creada en {mask_file}")
+            return output_file
         else:
             print("El polígono intersecta con el raster. Procediendo con el recorte normal.")
             geometries = [mapping(geom) for geom in poligono_gdf.geometry]

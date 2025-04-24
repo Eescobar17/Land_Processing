@@ -52,7 +52,7 @@ def determine_required_bands(selected_indices):
             required_bands.update({"B2": "sr", "B4": "sr", "B5": "sr", "B6": "sr"})  # Blue, Red, NIR, SWIR1
         elif index == "LST":
             # Para LST necesitamos la banda térmica B10 de la colección ST y bandas ópticas para NDVI
-            required_bands.update({"B10": "st", "B4": "sr", "B5": "sr"})  # TIRS1, Red, NIR para LST
+            required_bands.update({"B10": "st"})  # TIRS1 para LST
     
     if required_bands:
         print(f"\nÍndices seleccionados: {', '.join(selected_indices)}")
@@ -190,118 +190,40 @@ def find_matching_feature(features, path, row, date, target_collection):
 
 def download_specific_band(session, feature, band, collection, download_path):
     """
-    Intenta descargar una banda específica con varios métodos.
+    Downloads a specific band using the standard Landsat filename pattern.
     """
-    scene_id = feature.get('id', 'unknown')
+    scene_info = extract_scene_info(feature)
+    scene_id = scene_info['id']
+    
+    # Check if the band already exists in the download folder
+    output_path = os.path.join(download_path, f"{scene_id}_{collection.upper()}_{band}.TIF")
+    if os.path.exists(output_path):
+        msg = f"La banda {band} ({collection}) de {scene_id} ya existe. Omitiendo descarga."
+        print(msg)
+        yield msg
+        return True
+    
     msg = f"Intentando descargar banda {band} ({collection}) de {scene_id}"
     print(msg)
     yield msg
     
-    if 'assets' not in feature:
-        msg = f"Error: La imagen {scene_id} no tiene la clave 'assets'"
-        print(msg)
-        yield msg
-        return False
-    
-    # Determinar la ruta base y el nombre del archivo
-    collection_suffix = "_SR" if collection.lower() == "sr" else "_ST" if collection.lower() == "st" else ""
-    base_scene_id = scene_id.split(collection_suffix)[0] if collection_suffix in scene_id else scene_id
-    
-    # Nombre de archivo para guardar
-    file_name = os.path.join(download_path, f"{base_scene_id}_{collection.upper()}_{band}.TIF")
-    
-    # Lista de posibles variantes para buscar la banda
-    band_variants = [
-        band,                     # Ejemplo: "B4"
-        band.lower(),             # Ejemplo: "b4"
-        f"band{band[1:]}",        # Ejemplo: "band4"
-        f"band_{band[1:]}",       # Ejemplo: "band_4"
-        f"{collection.lower()}_{band.lower()}",  # Ejemplo: "sr_b4"
-        f"{band.lower()}"         # Ejemplo: "b4"
-    ]
-    
-    # Buscar la banda en los assets
+    # Try to find direct URL in assets first
     download_url = None
-    
-    # 1. Método 1: Buscar directamente en los assets
-    for variant in band_variants:
-        if variant in feature['assets'] and 'href' in feature['assets'][variant]:
-            download_url = feature['assets'][variant]['href']
-            print(f"Encontrada banda {band} como '{variant}'")
-            break
-    
-    # 2. Método 2: Buscar por patrones en nombres de assets
-    if not download_url:
-        for asset_key, asset_info in feature['assets'].items():
-            if 'href' in asset_info and band.lower() in asset_key.lower():
-                download_url = asset_info['href']
-                print(f"Encontrada banda {band} en asset '{asset_key}'")
-                break
-    
-    # 3. Método 3: Construir URL basada en otra banda encontrada
-    if not download_url:
-        # Buscar cualquier asset que termine en .TIF para usar como base
-        tif_assets = {}
-        for asset_key, asset_info in feature['assets'].items():
-            if 'href' in asset_info and asset_info['href'].lower().endswith('.tif'):
-                tif_assets[asset_key] = asset_info['href']
+    if 'assets' in feature:
+        # Check if the band is directly available in the assets
+        if band in feature['assets'] and 'href' in feature['assets'][band]:
+            download_url = feature['assets'][band]['href']
         
-        if tif_assets:
-            # Usar el primer asset .TIF como base
-            base_asset_key = list(tif_assets.keys())[0]
-            base_url = tif_assets[base_asset_key]
-            
-            # Extraer el nombre del archivo de la URL
-            base_filename = base_url.split('/')[-1]
-            
-            # Construir el nuevo nombre basado en el patrón
-            # Ejemplo: LC08_L2SP_009056_20240714_20240722_02_T1_ST_B10.TIF -> LC08_L2SP_009056_20240714_20240722_02_T1_SR_B4.TIF
-            parts = base_filename.split('_')
-            
-            if len(parts) >= 3:
-                # Encontrar la parte que tiene B10, B4, etc.
-                band_part_index = -1
-                for i, part in enumerate(parts):
-                    if part.startswith('B') and part[1:].isdigit():
-                        band_part_index = i
-                        break
-                
-                # Si encontramos la parte de la banda, reemplazarla
-                if band_part_index >= 0:
-                    # También buscar y reemplazar SR/ST si es necesario
-                    collection_index = -1
-                    for i, part in enumerate(parts):
-                        if part in ["SR", "ST"]:
-                            collection_index = i
-                            break
-                    
-                    # Reemplazar la colección si la encontramos
-                    if collection_index >= 0:
-                        parts[collection_index] = collection.upper()
-                    # Si no la encontramos pero está justo antes de la banda
-                    elif band_part_index > 0:
-                        parts.insert(band_part_index, collection.upper())
-                    
-                    # Reemplazar la banda
-                    parts[band_part_index] = band
-                    
-                    # Reconstruir el nombre de archivo
-                    new_filename = '_'.join(parts)
-                    
-                    # Construir la nueva URL
-                    download_url = base_url.replace(base_filename, new_filename)
-                    
-                    # Verificar si la URL existe
-                    try:
-                        head_response = session.head(download_url)
-                        if head_response.status_code == 200:
-                            print(f"Construida URL para banda {band}: {download_url}")
-                        else:
-                            download_url = None
-                    except:
-                        download_url = None
-    
-    # 4. Método 4: URL directa basada en patrones conocidos
+        # If not found directly, search through all assets for a matching band
+        if not download_url:
+            for asset_key, asset_info in feature['assets'].items():
+                # Look for assets that match the band pattern (B2, B3, etc.)
+                if ('href' in asset_info and 
+                    (f"_{band}" in asset_key or f"_{band.lower()}" in asset_key.lower())):
+                    download_url = asset_info['href']
+                    break
+
+    # If still not found, construct URL based on Landsat naming pattern
     if not download_url and 'properties' in feature:
         props = feature['properties']
         if all(k in props for k in ['landsat:wrs_path', 'landsat:wrs_row', 'datetime']):
@@ -310,46 +232,48 @@ def download_specific_band(session, feature, band, collection, download_path):
                 row = props['landsat:wrs_row']
                 date = props['datetime'][:10].replace('-', '')
                 
-                # Extraer información del ID de la escena
+                # Extract information from scene ID
                 scene_parts = scene_id.split('_')
                 if len(scene_parts) >= 5:
-                    satellite = scene_parts[0]  # Ej: LC08
-                    level = scene_parts[1]      # Ej: L2SP
+                    satellite = scene_parts[0]  # Ex: LC08
+                    level = scene_parts[1]      # Ex: L2SP
                     path_row = path.zfill(3) + row.zfill(3)
                     processing_date = scene_parts[4] if len(scene_parts) > 4 else ""
                     version = scene_parts[5] if len(scene_parts) > 5 else "02"
                     tier = scene_parts[6] if len(scene_parts) > 6 else "T1"
                     
-                    # Construir URL directa
+                    # Construct the standard URL pattern
+                    constructed_filename = f"{satellite}_{level}_{path_row}_{date}_{processing_date}_{version}_{tier}_{collection.upper()}_{band}.TIF"
                     direct_url = f"https://landsatlook.usgs.gov/data/collection02/level-2/standard/oli-tirs/{date[:4]}/{path}/{row}/"
                     direct_url += f"{satellite}_{level}_{path_row}_{date}_{processing_date}_{version}_{tier}/"
-                    direct_url += f"{satellite}_{level}_{path_row}_{date}_{processing_date}_{version}_{tier}_{collection.upper()}_{band}.TIF"
+                    direct_url += constructed_filename
                     
-                    # Verificar si existe
+                    # Check if URL exists
                     try:
                         head_response = session.head(direct_url)
                         if head_response.status_code == 200:
                             download_url = direct_url
-                            print(f"Construida URL directa para banda {band}: {download_url}")
+                            print(f"Usando URL directa para banda {band}: {download_url}")
                     except Exception as e:
                         print(f"Error verificando URL directa: {str(e)}")
             except Exception as e:
                 print(f"Error construyendo URL directa: {str(e)}")
     
-    # Si no se pudo encontrar la banda, registrar el error
     if not download_url:
         msg = f"No se pudo encontrar la banda {band} en los assets disponibles de esta escena"
         print(msg)
         yield msg
         return False
     
-    # Descargar la banda
+    # Download the band
     try:
+        file_name = os.path.join(download_path, f"{scene_id}_{collection.upper()}_{band}.TIF")
+        
         msg = f"Descargando: {os.path.basename(file_name)} desde {download_url}"
         print(msg)
         yield msg
 
-        # Descargar la imagen con autenticación
+        # Download with authentication
         with session.get(download_url, stream=True) as response:
             response.raise_for_status()
             total_size = int(response.headers.get('content-length', 0))
@@ -359,7 +283,7 @@ def download_specific_band(session, feature, band, collection, download_path):
                 for chunk in response.iter_content(chunk_size=8192):
                     file.write(chunk)
                     downloaded += len(chunk)
-                    # Mostrar progreso cada 20%
+                    # Show progress every 20%
                     if total_size > 0 and downloaded % (total_size // 5) < 8192:
                         percent = (downloaded / total_size) * 100
                         print(f"Progreso: {percent:.1f}%")
@@ -492,7 +416,7 @@ def download_images(features, scenes_needed, required_bands):
                         downloaded_band_info[band] = True
                 
                 # Si tenemos una escena ST y necesitamos bandas SR, buscar la correspondiente escena SR
-                if sr_needed and any(not downloaded_band_info[band] for band, coll in required_bands.items() if coll.lower() == 'sr'):
+                #if sr_needed and any(not downloaded_band_info[band] for band, coll in required_bands.items() if coll.lower() == 'sr'):
                     # Extraer información para buscar la correspondencia
                     scene_info = extract_scene_info(target_feature)
                     
@@ -568,17 +492,7 @@ def download_images(features, scenes_needed, required_bands):
             # Descargar metadatos para todas las escenas
             download_metadata(session, target_feature, scene_dir)
         
-        # Verificar si se descargaron todas las bandas necesarias
-        missing_bands = [f"{band} ({coll})" for band, coll in required_bands.items() if not downloaded_band_info[band]]
-        
-        if not missing_bands:
-            msg = f"Se descargaron todas las bandas requeridas para el grupo Path={path}, Row={row}, Fecha={date}"
-            print(msg)
-            yield msg
-        else:
-            msg = f"Advertencia: No se pudieron descargar las bandas: {', '.join(missing_bands)}"
-            print(msg)
-            yield msg
+       
     
     yield "\nProceso de descarga finalizado."
     return download_path
