@@ -9,3 +9,6 @@ if __name__ == "__main__":
     window = MapAppWindow()
     window.show()
     sys.exit(app.exec_())
+    
+    
+    

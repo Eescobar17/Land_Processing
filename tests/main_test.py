@@ -1,0 +1,3 @@
+from mosaico_test import generate_mosaics_and_clips
+
+generate_mosaics_and_clips()
